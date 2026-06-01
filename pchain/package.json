@@ -1,0 +1,24 @@
+{
+	"name": "pchain",
+"description": "TUI screen prototypes for pi-prompt-chain",
+	"version": "0.0.0",
+	"license": "MIT",
+	"type": "module",
+	"bin": {
+		"pchain": "dist/cli.js"
+	},
+	"scripts": {
+		"build": "tsc",
+		"dev": "tsc --watch"
+	},
+	"dependencies": {
+		"ink": "^4.1.0",
+		"meow": "^11.0.0",
+		"react": "^18.2.0"
+	},
+	"devDependencies": {
+		"@types/node": "^25.9.1",
+		"@types/react": "^18.2.0",
+		"typescript": "^5.0.3"
+	}
+}
