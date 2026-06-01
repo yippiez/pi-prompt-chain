@@ -108,8 +108,14 @@ class PromptChainEditor extends CustomEditor {
 		if (lines.length < 2) return lines;
 
 		const thm = this.ctx.ui.theme;
-		const dim = (text: string) => thm.fg("dim", text); // dark gray
-		const muted = (text: string) => thm.fg("muted", text); // slightly lighter
+
+		// Detect bash mode: the app swaps editor.borderColor between
+		// getThinkingBorderColor(level) and getBashModeBorderColor().
+		// We check which one is active by comparing output to known bash color.
+		const isBash = this.borderColor("x") === thm.fg("bashMode", "x");
+		const barColor = isBash
+			? (text: string) => thm.fg("bashMode", text)
+			: (text: string) => thm.fg("dim", text);
 
 		// Session name
 		const sessionName = this.pi.getSessionName() ?? "untitled";
@@ -120,18 +126,16 @@ class PromptChainEditor extends CustomEditor {
 			: "no model";
 
 		// Top bar: session name (left) · model (right)
-		const topLeft = dim(` ${sessionName} `);
-		const topRight = dim(` ${model} `);
+		const topLeft = barColor(` ${sessionName} `);
+		const topRight = barColor(` ${model} `);
 
 		// Bottom bar: cwd (left) · context usage + branch (right)
 		const branchStr = this.branch ? ` (${this.branch})` : "";
-		const bottomLeft = muted(` ${formatCwd(this.ctx.cwd)} `);
-		const bottomRight = muted(` ${formatContext(this.ctx)}${branchStr} `);
+		const bottomLeft = barColor(` ${formatCwd(this.ctx.cwd)} `);
+		const bottomRight = barColor(` ${formatContext(this.ctx)}${branchStr} `);
 
-		const darkBorder = (text: string) => dim(text);
-
-		lines[0] = fitBorder(topLeft, topRight, targetWidth, darkBorder);
-		lines[lines.length - 1] = fitBorder(bottomLeft, bottomRight, targetWidth, darkBorder);
+		lines[0] = fitBorder(topLeft, topRight, targetWidth, barColor);
+		lines[lines.length - 1] = fitBorder(bottomLeft, bottomRight, targetWidth, barColor);
 
 		// 3. center the whole thing
 		const totalPad = Math.max(0, width - targetWidth);
