@@ -1,29 +1,14 @@
 #!/usr/bin/env node
-import React from 'react';
-import {render} from 'ink';
-import meow from 'meow';
-import App from './app.js';
+import React from "react";
+import { render } from "ink";
+import Router from "./router.js";
 
-const cli = meow(
-	`
-	Usage
-	  $ design
+const designName = process.argv[2];
 
-	Options
-		--name  Your name
+if (!designName) {
+	console.error("usage: design <screen-name>");
+	console.error("       design hello");
+	process.exit(1);
+}
 
-	Examples
-	  $ design --name=Jane
-	  Hello, Jane
-`,
-	{
-		importMeta: import.meta,
-		flags: {
-			name: {
-				type: 'string',
-			},
-		},
-	},
-);
-
-render(<App name={cli.flags.name} />);
+render(<Router name={designName} />, { exitOnCtrlC: false });
