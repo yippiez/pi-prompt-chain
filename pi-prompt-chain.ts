@@ -61,6 +61,22 @@ function formatContext(ctx: ExtensionContext): string {
 	return `ctx ${Math.round(usage.percent)}%/${(contextWindow / 1000).toFixed(0)}k`;
 }
 
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function isEditorBorderLine(line: string): boolean {
+	const plain = stripAnsi(line);
+	return /^[─ ↑↓0-9more]+$/.test(plain) && plain.includes("─");
+}
+
+function findBottomBorderIndex(lines: string[]): number {
+	for (let i = lines.length - 1; i >= 1; i--) {
+		if (isEditorBorderLine(lines[i]!)) return i;
+	}
+	return lines.length - 1;
+}
+
 /* ── empty footer (info lives in prompt bar now) ────── */
 
 class EmptyFooter implements Component {
@@ -122,8 +138,8 @@ class PromptChainEditor extends CustomEditor {
 
 		// Model
 		const model = this.ctx.model
-			? `${this.ctx.model.provider}/${this.ctx.model.id}`
-			: "no model";
+			? `${this.ctx.model.provider}/${this.ctx.model.id} · ${this.pi.getThinkingLevel()}`
+			: `no model · ${this.pi.getThinkingLevel()}`;
 
 		// Top bar: session name (left) · model (right)
 		const topLeft = barColor(` ${sessionName} `);
@@ -134,8 +150,9 @@ class PromptChainEditor extends CustomEditor {
 		const bottomLeft = barColor(` ${formatCwd(this.ctx.cwd)} `);
 		const bottomRight = barColor(` ${formatContext(this.ctx)}${branchStr} `);
 
+		const bottomBorderIndex = findBottomBorderIndex(lines);
 		lines[0] = fitBorder(topLeft, topRight, targetWidth, barColor);
-		lines[lines.length - 1] = fitBorder(bottomLeft, bottomRight, targetWidth, barColor);
+		lines[bottomBorderIndex] = fitBorder(bottomLeft, bottomRight, targetWidth, barColor);
 
 		// 3. center the whole thing
 		const totalPad = Math.max(0, width - targetWidth);
