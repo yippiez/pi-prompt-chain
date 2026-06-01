@@ -114,7 +114,7 @@ class PromptChainEditor extends CustomEditor {
 		// We check which one is active by comparing output to known bash color.
 		const isBash = this.borderColor("x") === thm.fg("bashMode", "x");
 		const barColor = isBash
-			? (text: string) => thm.fg("bashMode", text)
+			? (text: string) => thm.fg("error", text)
 			: (text: string) => thm.fg("dim", text);
 
 		// Session name
