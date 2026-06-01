@@ -1,3 +1,5 @@
 node_modules/
 dist/
 .jj/
+__pycache__/
+*.pyc
