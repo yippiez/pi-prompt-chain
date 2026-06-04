@@ -1177,15 +1177,30 @@ class PromptChainEditor extends CustomEditor {
 		const boxHeight = Math.max(4, Math.floor(termHeight * PROMPT_HEIGHT_RATIO));
 		const outlineHeight = boxHeight - 2; // minus the two bar rows (hints are in the footer)
 
-		// Command mode: show the base editor (its input + slash command menu) inside
-		// the box. Fixed height keeps the differential renderer stable.
+		// Command mode: the typed /command stays inside the box, but its slash
+		// command menu is moved OUT of the text area to sit below the bottom prompt
+		// bar (between the box and the footer). Total height stays == boxHeight by
+		// stealing interior rows for the menu, so the differential renderer is stable.
 		if (this.commandMode) {
-			const base = super.render(W);
+			const base = super.render(W); // [topBorder, ...input, bottomBorder, ...menu]
+			const ed = this as unknown as {
+				autocompleteState?: unknown;
+				autocompleteList?: { render(w: number): string[] };
+			};
+			const rawMenu = ed.autocompleteState && ed.autocompleteList ? ed.autocompleteList.render(W) : [];
+			// Keep at least one input row visible inside the box.
+			const menuH = Math.min(rawMenu.length, Math.max(0, outlineHeight - 1));
+			const menu = rawMenu.slice(0, menuH);
+			// Strip the borders + menu from `base`, leaving just the input line(s).
+			const inputLines = base.slice(1, Math.max(1, base.length - rawMenu.length - 1));
+			const interiorH = outlineHeight - menuH;
 			const interior: string[] = [];
-			for (let k = 0; k < outlineHeight; k++) {
-				interior.push(bgFillLine(truncateToWidth(base[k] ?? "", W, ""), W, PANEL_BG));
+			for (let k = 0; k < interiorH; k++) {
+				interior.push(bgFillLine(truncateToWidth(inputLines[k] ?? "", W, ""), W, PANEL_BG));
 			}
-			return [topBar, ...interior, bottomBar];
+			// Transparent menu: no background fill, just the styled menu lines.
+			const menuLines = menu.map((l) => truncateToWidth(l, W, ""));
+			return [topBar, ...interior, bottomBar, ...menuLines];
 		}
 
 		// Flatten to a list of display LINES (a node may wrap to several), plus a
