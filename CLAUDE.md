@@ -21,11 +21,9 @@ Always use `jj` for version-control operations — do **not** use `git add` /
 The extension is split into modules in the repo root:
 
 - `pi-prompt-chain.ts` — entry (default export): wires session events + registers the editor
+- `nodes.ts` — the pure model: ALL type definitions (Node, BashNode, AnyNode, NodeStore, VisibleRow), the `createNode` factory, and the `OutlineModel` class (tree + cursor + ops)
+- `render.ts` — render/format helpers (wrap, fit, sanitize, format) + theme constants (colors, glyphs, layout ratios)
 - `editor.ts` — `PromptChainEditor` (the `CustomEditor`): input handling + rendering
-- `outline-model.ts` — `OutlineModel`: the pure outline tree + cursor + ops
-- `nodes.ts` — node data model: types, factories, guards
-- `theme.ts` — colors, glyphs, layout ratios
-- `text.ts` — pure render/format helpers (wrap, fit, sanitize, format)
 
 `pi` auto-loads `.pi/extensions/pi-prompt-chain.ts`, which is a small REAL shim
 (`export { default } from "../../pi-prompt-chain.ts"`) — NOT a symlink. pi

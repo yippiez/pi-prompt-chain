@@ -1,7 +1,7 @@
 import type { ExtensionAPI, KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { PromptChainEditor } from "./editor.ts";
-import { shortcutsText } from "./text.ts";
+import { shortcutsText } from "./render.ts";
 
 /* ── extension entry ────────────────────────────────── */
 
@@ -11,7 +11,7 @@ export default function (pi: ExtensionAPI) {
 	let activeEditor: PromptChainEditor | undefined;
 
 	pi.on("session_shutdown", async () => {
-		await activeEditor?.flushSave();
+		await activeEditor?.dispose();
 	});
 
 	pi.on("session_start", (_event, ctx) => {

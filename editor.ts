@@ -1,9 +1,7 @@
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
-import type { NodeId } from "./nodes.ts";
-import { OutlineModel, type VisibleRow } from "./outline-model.ts";
-import { BOX_CONTENT_H, BOX_MAX_W, BRANCH, CURSOR_ROW_BG, NODE_FILLED, NODE_OPEN, PANEL_BG, PROMPT_HEIGHT_RATIO } from "./theme.ts";
-import { bgFillLine, fitBorder, formatContext, formatCwd, sanitizeOutput, wrapText } from "./text.ts";
+import { OutlineModel, type NodeId, type VisibleRow } from "./nodes.ts";
+import { BOX_CONTENT_H, BOX_MAX_W, BRANCH, CURSOR_ROW_BG, NODE_FILLED, NODE_OPEN, PANEL_BG, PROMPT_HEIGHT_RATIO, bgFillLine, fitBorder, formatContext, formatCwd, sanitizeOutput, wrapText } from "./render.ts";
 
 /** Mirrors @earendil-works/pi-agent-core's ThinkingLevel (not re-exported here). */
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -28,7 +26,7 @@ export class PromptChainEditor extends CustomEditor {
 	) {
 		super(tui, theme, keybindings, { paddingX: 0 });
 		this.activeTui = tui;
-		this.model = new OutlineModel(new Map(), [], new Set()); // in-memory only; not persisted
+		this.model = new OutlineModel(new Map(), [], new Set());
 		void this.refreshBranch();
 
 		// Refresh branch periodically
@@ -44,21 +42,12 @@ export class PromptChainEditor extends CustomEditor {
 		this.activeTui.requestRender();
 	}
 
-	/* ---- persistence ----
-	 * Outline state is kept IN MEMORY only for the lifetime of the session; it is
-	 * intentionally NOT persisted to .pi/chains.jsonl. */
-
-	/** Clear timers on shutdown. Kept (and still called from session_shutdown) so
-	 *  the refresh interval doesn't outlive the session. */
-	async flushSave(): Promise<void> {
+	/** Clear timers on shutdown so the refresh interval doesn't outlive the session. */
+	async dispose(): Promise<void> {
 		if (this.refreshTimer) {
 			clearInterval(this.refreshTimer);
 			this.refreshTimer = undefined;
 		}
-	}
-
-	private afterEdit(): void {
-		this.activeTui.requestRender();
 	}
 
 	/* ---- input (Workflowy always-editing) ---- */
@@ -130,7 +119,7 @@ export class PromptChainEditor extends CustomEditor {
 
 	private run(op: () => void): void {
 		op();
-		this.afterEdit();
+		this.activeTui.requestRender();
 	}
 
 	/** Run the cursor's bash node and attach its output. */
@@ -138,13 +127,13 @@ export class PromptChainEditor extends CustomEditor {
 		const b = this.model.cursorBash();
 		if (!b || !b.command.trim()) return;
 		this.model.setBashResult(b.id, "…running…", -1);
-		this.afterEdit();
+		this.activeTui.requestRender();
 		const res = await this.pi
 			.exec("bash", ["-c", b.command], { cwd: this.ctx.cwd })
 			.catch(() => undefined);
 		const output = res ? sanitizeOutput(`${res.stdout}${res.stderr}`).replace(/\n+$/, "") : "(exec failed)";
 		this.model.setBashResult(b.id, output, res?.code ?? -1);
-		this.afterEdit();
+		this.activeTui.requestRender();
 	}
 
 	/** Compose the whole outline as markdown, send it to the agent, and clear. */
