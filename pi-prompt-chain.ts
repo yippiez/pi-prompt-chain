@@ -1,18 +1,10 @@
 import {
 	CustomEditor,
-	ToolExecutionComponent,
-	createBashTool,
-	createEditTool,
-	createFindTool,
-	createGrepTool,
-	createLsTool,
-	createReadTool,
-	createWriteTool,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
+import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 
@@ -130,13 +122,6 @@ export interface VisibleRow {
 	depth: number;
 	hasChildren: boolean;
 	collapsed: boolean;
-}
-
-interface OutlineMeta {
-	t: "meta";
-	v: 1;
-	roots: NodeId[];
-	collapsed: NodeId[];
 }
 
 export class OutlineModel {
@@ -486,50 +471,6 @@ export class OutlineModel {
 		for (const r of this.roots) walk(r, 0);
 		return out.join("\n");
 	}
-
-	/* ---- persistence ---- */
-
-	serialize(): string {
-		const meta: OutlineMeta = { t: "meta", v: 1, roots: this.roots, collapsed: [...this.collapsed] };
-		const lines = [JSON.stringify(meta)];
-		for (const node of this.store.values()) lines.push(JSON.stringify({ t: "node", node }));
-		return lines.join("\n");
-	}
-
-	static deserialize(text: string): OutlineModel {
-		const store: NodeStore = new Map();
-		let roots: NodeId[] = [];
-		let collapsedIds: NodeId[] = [];
-		try {
-			for (const raw of text.split("\n")) {
-				const line = raw.trim();
-				if (!line) continue;
-				const rec = JSON.parse(line);
-				if (rec?.t === "meta" && Array.isArray(rec.roots)) {
-					roots = rec.roots.filter((id: unknown) => typeof id === "string");
-					collapsedIds = Array.isArray(rec.collapsed)
-						? rec.collapsed.filter((id: unknown) => typeof id === "string")
-						: [];
-				} else if (
-					rec?.t === "node" &&
-					rec.node &&
-					typeof rec.node.id === "string" &&
-					typeof rec.node.kind === "string"
-				) {
-					store.set(rec.node.id, rec.node as AnyNode);
-				}
-			}
-		} catch {
-			// corrupt line(s) -> fall through to the validated fallback below
-		}
-		// Drop dangling child refs so a corrupt file can't crash navigation.
-		for (const node of store.values()) {
-			if (isParentNode(node)) node.children = node.children.filter((id) => store.has(id));
-		}
-		const validRoots = roots.filter((id) => store.has(id));
-		const collapsed = new Set(collapsedIds.filter((id) => store.has(id)));
-		return new OutlineModel(store, validRoots, collapsed);
-	}
 }
 
 const BAR_WIDTH_RATIO = 0.8;
@@ -674,203 +615,6 @@ function findBottomBorderIndex(lines: string[]): number {
 		if (isEditorBorderLine(lines[i]!)) return i;
 	}
 	return lines.length - 1;
-}
-
-/* ── empty footer (info lives in prompt bar now) ────── */
-
-class EmptyFooter implements Component {
-	render(): string[] {
-		return [];
-	}
-	invalidate(): void {}
-}
-
-/* ── streaming tool bar ─────────────────────────────── */
-
-type CompactTool = {
-	id: string;
-	name: string;
-	detail: string;
-	isError: boolean;
-};
-
-const TOOL_BAR_WIDGET_KEY = "pi-prompt-chain-tool-bar";
-
-type StyledSegment = {
-	text: string;
-	color: "accent" | "dim" | "error" | "muted";
-};
-
-class ToolBarWidget implements Component {
-	constructor(
-		private getTools: () => CompactTool[],
-		private getRevealWidth: () => number,
-		private theme: ExtensionContext["ui"]["theme"],
-	) {}
-
-	private buildSegments(tools: CompactTool[]): StyledSegment[] {
-		const segments: StyledSegment[] = [];
-		for (let i = 0; i < tools.length; i++) {
-			const tool = tools[i]!;
-			const isLast = i === tools.length - 1;
-			if (i > 0) segments.push({ text: " · ", color: "muted" });
-			segments.push({ text: tool.name, color: tool.isError ? "error" : isLast ? "accent" : "muted" });
-			if (tool.detail) segments.push({ text: ` ${tool.detail}`, color: isLast ? "dim" : "muted" });
-		}
-		return segments;
-	}
-
-	private renderTail(segments: StyledSegment[], width: number): string {
-		const totalWidth = segments.reduce((sum, segment) => sum + visibleWidth(segment.text), 0);
-		const endAt = Math.min(totalWidth, this.getRevealWidth());
-		const startAt = Math.max(0, endAt - width);
-		let cursor = 0;
-		let line = "";
-
-		for (const segment of segments) {
-			let visible = "";
-			for (const char of Array.from(segment.text)) {
-				const charWidth = visibleWidth(char);
-				const nextCursor = cursor + charWidth;
-				if (nextCursor > startAt && cursor < endAt) visible += char;
-				cursor = nextCursor;
-			}
-			if (visible) line += this.theme.fg(segment.color, visible);
-		}
-
-		return " ".repeat(Math.max(0, width - visibleWidth(line))) + line;
-	}
-
-	render(width: number): string[] {
-		const tools = this.getTools();
-		if (tools.length === 0) return [];
-
-		const targetWidth = Math.max(MIN_BAR_WIDTH, Math.floor(width * BAR_WIDTH_RATIO));
-		const totalPad = Math.max(0, width - targetWidth);
-		const leftPad = " ".repeat(Math.floor(totalPad / 2));
-		const rightPad = " ".repeat(totalPad - Math.floor(totalPad / 2));
-		const line = this.renderTail(this.buildSegments(tools), targetWidth);
-
-		return [leftPad + this.theme.bg("toolPendingBg", line) + rightPad];
-	}
-
-	invalidate(): void {}
-}
-
-function shortenPath(path: string | undefined, cwd: string): string {
-	if (!path) return "";
-	if (path.startsWith(`${cwd}/`)) return path.slice(cwd.length + 1);
-	const home = process.env.HOME;
-	if (home && path.startsWith(home)) return `~${path.slice(home.length)}`;
-	return path;
-}
-
-function oneLine(text: string | undefined): string {
-	return (text ?? "").replace(/[\r\n\t]+/g, " ").replace(/ +/g, " ").trim();
-}
-
-function compactDetail(text: string, maxWidth = 22): string {
-	return truncateToWidth(oneLine(text), maxWidth, "…");
-}
-
-function compactPath(path: string | undefined, cwd: string): string {
-	const shortened = shortenPath(path, cwd);
-	if (visibleWidth(shortened) <= 22) return shortened;
-	const parts = shortened.split(/[\\/]/).filter(Boolean);
-	const last = parts.at(-1) ?? shortened;
-	return last ? `…/${compactDetail(last, 19)}` : compactDetail(shortened, 22);
-}
-
-function compactToolsWidth(tools: CompactTool[]): number {
-	return tools.reduce((sum, tool, index) => {
-		const separator = index > 0 ? 3 : 0;
-		return sum + separator + visibleWidth(tool.name) + (tool.detail ? 1 + visibleWidth(tool.detail) : 0);
-	}, 0);
-}
-
-function formatToolSummary(toolName: string, args: any, cwd: string): Omit<CompactTool, "id" | "isError"> {
-	const name = toolName.charAt(0).toUpperCase() + toolName.slice(1);
-	switch (toolName) {
-		case "read":
-			return { name: "Read", detail: compactPath(args?.path, cwd) };
-		case "bash":
-			return { name: "Bash", detail: compactDetail(args?.command ?? "", 28) };
-		case "edit":
-			return { name: "Edit", detail: compactPath(args?.path, cwd) };
-		case "write":
-			return { name: "Write", detail: compactPath(args?.path, cwd) };
-		case "grep": {
-			const pattern = args?.pattern ? `"${args.pattern}"` : "";
-			const path = compactPath(args?.path ?? args?.include, cwd);
-			return { name: "Grep", detail: compactDetail([pattern, path].filter(Boolean).join(" in "), 28) };
-		}
-		case "find":
-			return { name: "Find", detail: compactDetail(args?.pattern ?? compactPath(args?.path, cwd), 28) };
-		case "ls":
-			return { name: "Ls", detail: compactPath(args?.path ?? ".", cwd) };
-		default:
-			return { name, detail: compactDetail(JSON.stringify(args ?? {}), 28) };
-	}
-}
-
-function createBuiltInTools(cwd: string) {
-	return {
-		read: createReadTool(cwd),
-		bash: createBashTool(cwd),
-		edit: createEditTool(cwd),
-		write: createWriteTool(cwd),
-		find: createFindTool(cwd),
-		grep: createGrepTool(cwd),
-		ls: createLsTool(cwd),
-	};
-}
-
-const builtInToolCache = new Map<string, ReturnType<typeof createBuiltInTools>>();
-const HIDDEN_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "find", "grep", "ls"]);
-let toolExecutionRenderPatched = false;
-
-function patchHiddenToolRows(): void {
-	if (toolExecutionRenderPatched) return;
-	toolExecutionRenderPatched = true;
-
-	const originalRender = ToolExecutionComponent.prototype.render;
-	ToolExecutionComponent.prototype.render = function (this: ToolExecutionComponent, width: number): string[] {
-		const toolName = (this as unknown as { toolName?: string }).toolName;
-		if (toolName && HIDDEN_TOOL_NAMES.has(toolName)) return [];
-		return originalRender.call(this, width);
-	};
-}
-
-function getBuiltInTools(cwd: string): ReturnType<typeof createBuiltInTools> {
-	let tools = builtInToolCache.get(cwd);
-	if (!tools) {
-		tools = createBuiltInTools(cwd);
-		builtInToolCache.set(cwd, tools);
-	}
-	return tools;
-}
-
-function registerHiddenToolRenderers(pi: ExtensionAPI): void {
-	patchHiddenToolRows();
-	const names = ["read", "bash", "edit", "write", "find", "grep", "ls"] as const;
-	for (const name of names) {
-		const base = getBuiltInTools(process.cwd())[name];
-		pi.registerTool({
-			...base,
-			name,
-			renderShell: "self",
-			async execute(toolCallId, params, signal, onUpdate, ctx) {
-				const tool = getBuiltInTools(ctx.cwd)[name];
-				return tool.execute(toolCallId, params, signal, onUpdate, ctx);
-			},
-			renderCall() {
-				return new EmptyFooter();
-			},
-			renderResult() {
-				return new EmptyFooter();
-			},
-		});
-	}
 }
 
 /* ── editor ─────────────────────────────────────────── */
@@ -1236,110 +980,10 @@ class PromptChainEditor extends CustomEditor {
 
 export default function (pi: ExtensionAPI) {
 	// Native conversation (thinking · tools · output) renders inline in the
-	// scrollback ABOVE the editor box — nothing custom is pinned above the prompt
-	// bar. (Previously tool rows were hidden to feed a top history pane.)
-
-	let compactTools: CompactTool[] = [];
-	let revealWidth = 0;
-	let animationTimer: ReturnType<typeof setInterval> | undefined;
-	let clearTimer: ReturnType<typeof setTimeout> | undefined;
-	let widgetTui: TUI | undefined;
+	// scrollback ABOVE the editor box — nothing custom is pinned above the prompt bar.
 	let activeEditor: PromptChainEditor | undefined;
 
-	function stopAnimation(): void {
-		if (animationTimer) {
-			clearInterval(animationTimer);
-			animationTimer = undefined;
-		}
-	}
-
-	function stopClearTimer(): void {
-		if (clearTimer) {
-			clearTimeout(clearTimer);
-			clearTimer = undefined;
-		}
-	}
-
-	function animateToolBar(): void {
-		const targetWidth = compactToolsWidth(compactTools);
-		if (revealWidth >= targetWidth || animationTimer) return;
-		animationTimer = setInterval(() => {
-			const nextTargetWidth = compactToolsWidth(compactTools);
-			revealWidth = Math.min(nextTargetWidth, revealWidth + 4);
-			widgetTui?.requestRender();
-			if (revealWidth >= nextTargetWidth) stopAnimation();
-		}, 20);
-	}
-
-	function clearToolBar(ctx: ExtensionContext): void {
-		stopAnimation();
-		stopClearTimer();
-		compactTools = [];
-		revealWidth = 0;
-		ctx.ui.setWidget(TOOL_BAR_WIDGET_KEY, undefined, { placement: "aboveEditor" });
-	}
-
-	function updateToolBar(_ctx: ExtensionContext): void {
-		// Nothing is pinned above the editor: tool progress is visible in the
-		// native conversation scrollback. Kept as a no-op so the event handlers
-		// (which still track compactTools) need no changes.
-	}
-
-	function settleToolBar(ctx: ExtensionContext): void {
-		stopClearTimer();
-		clearTimer = setTimeout(() => clearToolBar(ctx), 1600);
-	}
-
-	pi.on("agent_start", (_event, ctx) => {
-		clearToolBar(ctx);
-	});
-
-	pi.on("tool_execution_start", (event, ctx) => {
-		const existing = compactTools.find((tool) => tool.id === event.toolCallId);
-		const summary = formatToolSummary(event.toolName, event.args, ctx.cwd);
-		if (existing) {
-			existing.name = summary.name;
-			existing.detail = summary.detail;
-			existing.isError = false;
-		} else {
-			compactTools.push({ id: event.toolCallId, ...summary, isError: false });
-		}
-		updateToolBar(ctx);
-	});
-
-	pi.on("tool_execution_update", (event, ctx) => {
-		const existing = compactTools.find((tool) => tool.id === event.toolCallId);
-		if (!existing) return;
-		const summary = formatToolSummary(event.toolName, event.args, ctx.cwd);
-		existing.name = summary.name;
-		existing.detail = summary.detail;
-		updateToolBar(ctx);
-	});
-
-	pi.on("tool_execution_end", (event, ctx) => {
-		const existing = compactTools.find((tool) => tool.id === event.toolCallId);
-		if (existing) {
-			existing.isError = event.isError;
-		} else {
-			compactTools.push({
-				id: event.toolCallId,
-				...formatToolSummary(event.toolName, {}, ctx.cwd),
-				isError: event.isError,
-			});
-		}
-		updateToolBar(ctx);
-	});
-
-	pi.on("agent_end", (event, ctx) => {
-		const aborted = event.messages.some(
-			(message) => message.role === "assistant" && message.stopReason === "aborted",
-		);
-		if (aborted) clearToolBar(ctx);
-		else settleToolBar(ctx);
-	});
-
-	pi.on("session_shutdown", async (_event, ctx) => {
-		clearToolBar(ctx);
+	pi.on("session_shutdown", async () => {
 		await activeEditor?.flushSave();
 	});
 
