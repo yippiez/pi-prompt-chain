@@ -536,7 +536,7 @@ const MIN_BAR_WIDTH = 40;
 
 /* ── prompt panel (half-height, dark gray background) ──── */
 
-const PROMPT_HEIGHT_RATIO = 0.7;
+const PROMPT_HEIGHT_RATIO = 0.5;
 // Dark gray background (truecolor #2a2a2a). The TUI appends an SGR reset to
 // every line, so the background never bleeds into other rows.
 const PANEL_BG = "\x1b[48;2;42;42;42m";
@@ -1231,7 +1231,9 @@ class PromptChainEditor extends CustomEditor {
 /* ── extension entry ────────────────────────────────── */
 
 export default function (pi: ExtensionAPI) {
-	registerHiddenToolRenderers(pi);
+	// Native conversation (thinking · tools · output) renders inline in the
+	// scrollback ABOVE the editor box — nothing custom is pinned above the prompt
+	// bar. (Previously tool rows were hidden to feed a top history pane.)
 
 	let compactTools: CompactTool[] = [];
 	let revealWidth = 0;
@@ -1273,21 +1275,10 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setWidget(TOOL_BAR_WIDGET_KEY, undefined, { placement: "aboveEditor" });
 	}
 
-	function updateToolBar(ctx: ExtensionContext): void {
-		stopClearTimer();
-		if (compactTools.length === 0) {
-			ctx.ui.setWidget(TOOL_BAR_WIDGET_KEY, undefined, { placement: "aboveEditor" });
-			return;
-		}
-		ctx.ui.setWidget(
-			TOOL_BAR_WIDGET_KEY,
-			(tui, theme) => {
-				widgetTui = tui;
-				return new ToolBarWidget(() => compactTools, () => revealWidth, theme);
-			},
-			{ placement: "aboveEditor" },
-		);
-		animateToolBar();
+	function updateToolBar(_ctx: ExtensionContext): void {
+		// Nothing is pinned above the editor: tool progress is visible in the
+		// native conversation scrollback. Kept as a no-op so the event handlers
+		// (which still track compactTools) need no changes.
 	}
 
 	function settleToolBar(ctx: ExtensionContext): void {
