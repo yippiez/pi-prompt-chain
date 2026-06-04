@@ -275,16 +275,11 @@ export class OutlineModel {
 		this.cursor = { id: fresh.id, col: 0 };
 	}
 
-	/** Insert newId visually below `id`: first child of an expanded parent, else
-	 *  the next sibling. */
+	/** Insert newId as the next SIBLING of `id` (after `id`'s whole subtree).
+	 *  Enter never descends into a node's children — use Tab to make a child. */
 	private insertAfter(id: NodeId, newId: NodeId): void {
-		const node = this.store.get(id);
-		if (node && isParentNode(node) && node.children.length > 0 && !this.collapsed.has(id)) {
-			node.children.unshift(newId);
-		} else {
-			const { siblings, index } = this.findParent(id);
-			siblings.splice(index + 1, 0, newId);
-		}
+		const { siblings, index } = this.findParent(id);
+		siblings.splice(index + 1, 0, newId);
 	}
 
 	/** Enter:
@@ -362,30 +357,29 @@ export class OutlineModel {
 		const id = this.cursor.id;
 		const node = this.store.get(id);
 		if (!node) return;
+
+		// Backspace only removes a TOP-LEVEL LEAF (no parent, no children). A node
+		// that has a parent or children can't be merged away — that would change the
+		// tree shape implicitly. Use Ctrl+D, which deletes the node and its subtree.
+		const hasParent = this.findParent(id).parentId !== null;
+		const hasChildren = isParentNode(node) && node.children.length > 0;
+		if (hasParent || hasChildren) return;
+
 		const prevId = rows[i - 1]!.id;
 		const prev = this.store.get(prevId);
 		if (!prev) return;
-
 		const myText = this.textOf(id);
-		const myChildren = isParentNode(node) ? node.children : [];
 
-		// Fast path: empty, childless node -> delete it outright.
-		if (myText.length === 0 && myChildren.length === 0) {
+		// Empty leaf -> delete outright; non-empty leaf -> merge its text into prev.
+		if (myText.length === 0) {
 			this.detach(id);
 			this.store.delete(id);
 			this.cursor = { id: prevId, col: this.textOf(prevId).length };
 			this.ensureNonEmpty();
 			return;
 		}
-
-		// Otherwise merge into prev (guard against losing children to a leaf).
-		if (!isParentNode(prev) && myChildren.length > 0) return;
 		const seam = this.textOf(prevId).length;
 		this.setNodeText(prevId, this.textOf(prevId) + myText);
-		if (myChildren.length > 0 && isParentNode(prev)) {
-			prev.children.push(...myChildren);
-			this.collapsed.delete(prevId);
-		}
 		this.detach(id);
 		this.store.delete(id);
 		this.cursor = { id: prevId, col: seam };
