@@ -18,8 +18,6 @@ import { randomUUID } from "node:crypto";
 
 /** Mirrors @earendil-works/pi-agent-core's ThinkingLevel (not re-exported here). */
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 
 /* ── prompt-chain data model ─────────────────────────────
  * A tree of nodes the prompt chain is built from. Every node has a stable UUID.
@@ -885,8 +883,6 @@ class PromptChainEditor extends CustomEditor {
 	private scrollTop = 0;
 	private commandMode = false; // delegating to the base editor for a /slash command
 	private boxScroll = new Map<NodeId, number>(); // per bash node: output box scroll offset
-	private saveTimer: ReturnType<typeof setTimeout> | undefined;
-	private chainsPath: string;
 
 	constructor(
 		tui: TUI,
@@ -897,9 +893,7 @@ class PromptChainEditor extends CustomEditor {
 	) {
 		super(tui, theme, keybindings, { paddingX: 0 });
 		this.activeTui = tui;
-		this.chainsPath = join(ctx.cwd, ".pi", "chains.jsonl");
-		this.model = new OutlineModel(new Map(), [], new Set()); // empty until loaded
-		void this.loadFrom(this.chainsPath);
+		this.model = new OutlineModel(new Map(), [], new Set()); // in-memory only; not persisted
 		void this.refreshBranch();
 
 		// Refresh branch periodically
@@ -915,46 +909,21 @@ class PromptChainEditor extends CustomEditor {
 		this.activeTui.requestRender();
 	}
 
-	/* ---- persistence ---- */
+	/* ---- persistence ----
+	 * Outline state is kept IN MEMORY only for the lifetime of the session; it is
+	 * intentionally NOT persisted to .pi/chains.jsonl. */
 
-	private async loadFrom(path: string): Promise<void> {
-		try {
-			this.model = OutlineModel.deserialize(await readFile(path, "utf8"));
-		} catch {
-			this.model = new OutlineModel(new Map(), [], new Set());
-		}
-		this.activeTui.requestRender();
-	}
-
-	private async saveNow(): Promise<void> {
-		try {
-			await mkdir(dirname(this.chainsPath), { recursive: true });
-			await writeFile(this.chainsPath, `${this.model.serialize()}\n`, "utf8");
-		} catch {
-			// best-effort: never crash the TUI on a write error
-		}
-	}
-
-	private scheduleSave(): void {
-		if (this.saveTimer) clearTimeout(this.saveTimer);
-		this.saveTimer = setTimeout(() => void this.saveNow(), 400);
-	}
-
+	/** Clear timers on shutdown. Kept (and still called from session_shutdown) so
+	 *  the refresh interval doesn't outlive the session. */
 	async flushSave(): Promise<void> {
-		if (this.saveTimer) {
-			clearTimeout(this.saveTimer);
-			this.saveTimer = undefined;
-		}
 		if (this.refreshTimer) {
 			clearInterval(this.refreshTimer);
 			this.refreshTimer = undefined;
 		}
-		await this.saveNow();
 	}
 
 	private afterEdit(): void {
 		this.activeTui.requestRender();
-		this.scheduleSave();
 	}
 
 	/* ---- input (Workflowy always-editing) ---- */
@@ -1051,7 +1020,6 @@ class PromptChainEditor extends CustomEditor {
 		this.pi.sendUserMessage(md, this.ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		// Clear the outline — reset to a single empty root node.
 		this.model = new OutlineModel(new Map(), [], new Set());
-		void this.saveNow();
 		this.activeTui.requestRender();
 	}
 

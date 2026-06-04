@@ -3,3 +3,6 @@ dist/
 .jj/
 __pycache__/
 *.pyc
+
+# pi extension runtime state (outline is in-memory only)
+.pi/chains.jsonl
