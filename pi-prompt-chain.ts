@@ -15,6 +15,9 @@ import {
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
+
+/** Mirrors @earendil-works/pi-agent-core's ThinkingLevel (not re-exported here). */
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -580,7 +583,7 @@ function wrapText(text: string, width: number): { str: string; start: number }[]
 
 // Muted, compact one-line keybinding hint shown in the footer.
 function shortcutsText(width: number, thm: ExtensionContext["ui"]["theme"]): string {
-	const parts = ["⇥ indent", "↵ split", "^d del", "^␣ fold", "! bash", "^r run", "^s send", "/ cmd"];
+	const parts = ["⇥ indent", "↵ split", "^d del", "^␣ fold", "! bash", "^r run", "^s send", "^t think", "/ cmd"];
 	return thm.fg("dim", truncateToWidth(` ${parts.join("  ")}`, width, "…"));
 }
 
@@ -1000,6 +1003,7 @@ class PromptChainEditor extends CustomEditor {
 		if (matchesKey(data, Key.ctrl("space"))) return this.run(() => m.toggleCollapse());
 		if (matchesKey(data, Key.ctrl("r"))) return void this.runBash();
 		if (matchesKey(data, Key.ctrl("s"))) return void this.sendOutline();
+		if (matchesKey(data, Key.ctrl("t"))) return this.cycleThinkingLevel();
 		if (matchesKey(data, "pageDown")) return this.run(() => this.scrollBox(1));
 		if (matchesKey(data, "pageUp")) return this.run(() => this.scrollBox(-1));
 
@@ -1048,6 +1052,23 @@ class PromptChainEditor extends CustomEditor {
 		// Clear the outline — reset to a single empty root node.
 		this.model = new OutlineModel(new Map(), [], new Set());
 		void this.saveNow();
+		this.activeTui.requestRender();
+	}
+
+	/** Ctrl+T: scroll to the agent's next thinking level. Replaces the built-in
+	 *  "hide/show thinking block" toggle. setThinkingLevel clamps unsupported
+	 *  levels to the model's capabilities, so we advance through the ordered list
+	 *  and stop at the first candidate that actually changes the effective level —
+	 *  this skips levels the model doesn't support and never gets stuck. */
+	private cycleThinkingLevel(): void {
+		const order: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+		const start = this.pi.getThinkingLevel();
+		let idx = order.indexOf(start);
+		if (idx < 0) idx = 0;
+		for (let step = 1; step <= order.length; step++) {
+			this.pi.setThinkingLevel(order[(idx + step) % order.length]);
+			if (this.pi.getThinkingLevel() !== start) break; // landed on a supported, different level
+		}
 		this.activeTui.requestRender();
 	}
 
