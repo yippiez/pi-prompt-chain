@@ -6,8 +6,9 @@
  * untouched, and replacing only the rendering:
  *   - renderShell: "self"  → no boxed shell / background block around the row
  *   - renderCall           → a single line: "<Verb> <primary arg>"
- *   - renderResult         → nothing on success (the call line stands alone),
- *                            one red line on error so failures stay visible
+ *   - renderResult         → nothing on collapsed success (the call line stands alone),
+ *                            one red line on collapsed error; Ctrl+O expanded
+ *                            details only for bash and edit
  *
  * The effect in the transcript is a compact stream like:
  *   Read src/app.ts
@@ -29,7 +30,7 @@ import {
 	createWriteTool,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { Container, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const LEFT_PAD = " "; // align compact tool rows with thinking/output transcript rows
 const MAX_ARG = 75; // truncate the one-line arg so a padded row never wraps
@@ -59,6 +60,60 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 function colorName(name: string, label: string): string {
 	const [r, g, b] = hslToRgb(hueFromName(name), 0.62, 0.65);
 	return `\x1b[1;38;2;${r};${g};${b}m${label}\x1b[22;39m`;
+}
+
+class RenderLines {
+	constructor(private readonly draw: (width: number) => string[]) {}
+	invalidate() {}
+	render(width: number): string[] {
+		return this.draw(width);
+	}
+}
+
+function resultText(result: { content?: Array<{ type: string; text?: string }> }): string {
+	return result.content?.map((part) => (part.type === "text" ? (part.text ?? "") : "")).filter(Boolean).join("\n") ?? "";
+}
+
+function renderBashDetails(text: string, theme: any): RenderLines {
+	return new RenderLines((width) => {
+		const indent = LEFT_PAD;
+		const boxW = Math.max(8, Math.min(104, width - visibleWidth(indent) - 1));
+		const innerW = Math.max(1, boxW - 4);
+		const dim = (s: string) => theme.fg("dim", s);
+		const label = " stdout ";
+		const lines = text.replace(/\n+$/, "").split("\n");
+		const out: string[] = [];
+		out.push(dim(`${indent}╭${label}${"─".repeat(Math.max(0, boxW - 2 - visibleWidth(label)))}╮`));
+		for (const raw of lines.length > 0 ? lines : [""]) {
+			let cell = truncateToWidth(raw, innerW, "…");
+			cell += " ".repeat(Math.max(0, innerW - visibleWidth(cell)));
+			out.push(dim(`${indent}│ ${cell} │`));
+		}
+		out.push(dim(`${indent}╰${"─".repeat(Math.max(0, boxW - 2))}╯`));
+		return out;
+	});
+}
+
+function colorDiffLine(line: string, theme: any): string {
+	const padded = `${LEFT_PAD}${line.replace(/\t/g, "   ")}`;
+	if (line.startsWith("+")) return theme.fg("toolDiffAdded", padded);
+	if (line.startsWith("-")) return theme.fg("toolDiffRemoved", padded);
+	return theme.fg("toolDiffContext", padded);
+}
+
+function renderEditDetails(args: any, result: any, isError: boolean, theme: any): RenderLines {
+	return new RenderLines((width) => {
+		const path = String(args?.path ?? args?.file_path ?? "");
+		const out: string[] = [];
+		if (path) out.push(theme.fg("dim", truncateToWidth(`${LEFT_PAD}diff ${path}`, width, "…")));
+		if (isError) {
+			for (const line of resultText(result).split("\n")) out.push(theme.fg("error", truncateToWidth(`${LEFT_PAD}${line}`, width, "…")));
+			return out;
+		}
+		const diff = typeof result.details?.diff === "string" ? result.details.diff : "";
+		for (const line of diff.split("\n")) out.push(truncateToWidth(colorDiffLine(line, theme), width, "…"));
+		return out.length > 0 ? out : [];
+	});
 }
 
 export default function (pi: ExtensionAPI) {
@@ -101,12 +156,17 @@ export default function (pi: ExtensionAPI) {
 				return new Text(line, 0, 0);
 			},
 
-			renderResult(result, { isPartial }, theme, _context) {
-				if (isPartial) return new Container(); // still running: keep the lone call line
-				const first = result.content?.[0];
-				const text = first?.type === "text" ? first.text : "";
+			renderResult(result, options, theme, context) {
+				if (options.isPartial) return new Container(); // still running: keep the lone call line
+				const text = resultText(result);
 				const details = result.details as any;
 				const isError = Boolean(details?.error || details?.blocked) || /^Error/i.test(text);
+
+				if (options.expanded) {
+					if (spec.name === "bash") return renderBashDetails(text, theme) as any;
+					if (spec.name === "edit") return renderEditDetails(context.args, result, isError, theme) as any;
+				}
+
 				if (isError) {
 					return new Text(theme.fg("error", `${LEFT_PAD}✗ ${fit(text.split("\n")[0] ?? "error")}`), 0, 0);
 				}

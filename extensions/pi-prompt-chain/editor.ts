@@ -21,6 +21,8 @@ export class PromptChainEditor extends CustomEditor {
 	private bashCompletion:
 		| { id: NodeId; prefix: string; items: AutocompleteItem[]; selected: number }
 		| undefined;
+	private isInPaste = false;
+	private pasteBuffer = "";
 	private outlineHistory: OutlineSnapshot[] = [];
 	private historyIndex: number | undefined;
 	private historyDraft: OutlineSnapshot | undefined;
@@ -87,11 +89,6 @@ export class PromptChainEditor extends CustomEditor {
 		// later breaks slash-command mode.
 		if (!this.commandMode && this.getText().length > 0) this.setText("");
 
-		if (this.bashCompletion) {
-			if (this.handleBashCompletionInput(data)) return;
-			this.bashCompletion = undefined;
-		}
-
 		// While composing a /slash command, hand all input to the base editor
 		// (which owns the command menu + execution). Escape cancels back to the
 		// outline; we also exit once the buffer no longer holds a "/command".
@@ -115,6 +112,13 @@ export class PromptChainEditor extends CustomEditor {
 			super.handleInput("/");
 			this.activeTui.requestRender();
 			return;
+		}
+
+		if (this.handleOutlinePasteInput(data)) return;
+
+		if (this.bashCompletion) {
+			if (this.handleBashCompletionInput(data)) return;
+			this.bashCompletion = undefined;
 		}
 
 		if (matchesKey(data, Key.enter)) return this.run(() => m.enter());
@@ -162,28 +166,81 @@ export class PromptChainEditor extends CustomEditor {
 			}
 		}
 
-		// Printable char, or a paste. Bracketed paste includes control bytes, and
-		// multi-line clipboard text includes newlines, so handle it before falling
-		// through to the base editor.
+		// Printable char.
 		if (data.length === 1 && data.charCodeAt(0) >= 32) return this.run(() => m.insertChar(data));
-		const paste = this.normalizePaste(data);
-		if (paste !== undefined) return this.run(() => m.pasteText(paste));
 
 		// Escape (abort), Ctrl+D (exit), Ctrl+P (model cycle), shortcuts -> app.
 		super.handleInput(data);
 	}
 
-	private normalizePaste(data: string): string | undefined {
-		if (data.length <= 1) return undefined;
-		let text = data;
-		if (text.startsWith("\x1b[200~") && text.endsWith("\x1b[201~")) {
-			text = text.slice("\x1b[200~".length, -"\x1b[201~".length);
+	private handleOutlinePasteInput(data: string): boolean {
+		const start = "\x1b[200~";
+		const end = "\x1b[201~";
+
+		if (data.includes(start)) {
+			this.isInPaste = true;
+			this.pasteBuffer = "";
+			data = data.replace(start, "");
 		}
+
+		if (this.isInPaste) {
+			this.pasteBuffer += data;
+			const endIndex = this.pasteBuffer.indexOf(end);
+			if (endIndex === -1) return true;
+
+			const pasted = this.cleanPasteText(this.pasteBuffer.slice(0, endIndex));
+			const remaining = this.pasteBuffer.slice(endIndex + end.length);
+			this.isInPaste = false;
+			this.pasteBuffer = "";
+			if (pasted.length > 0) this.run(() => this.pasteIntoOutline(pasted));
+			if (remaining.length > 0) this.handleInput(remaining);
+			return true;
+		}
+
+		const direct = this.normalizeDirectPaste(data);
+		if (direct === undefined) return false;
+		this.run(() => this.pasteIntoOutline(direct));
+		return true;
+	}
+
+	private normalizeDirectPaste(data: string): string | undefined {
+		if (data.length <= 1) return undefined;
+		const decoded = this.decodePasteControlSequences(data);
 		// If it is still an escape/control sequence without printable paste content,
 		// let the app handle it as a keybinding instead.
 		// biome-ignore lint/suspicious/noControlCharactersInRegex: distinguishing paste from key escape sequences
-		if (!text.includes("\n") && /[\x00-\x08\x0b-\x1f\x7f]/.test(text)) return undefined;
-		return text;
+		if (!decoded.includes("\n") && /[\x00-\x08\x0b-\x1f\x7f]/.test(decoded)) return undefined;
+		const cleaned = this.cleanPasteText(decoded, false);
+		return cleaned.length > 0 ? cleaned : undefined;
+	}
+
+	private cleanPasteText(text: string, decode = true): string {
+		const decoded = decode ? this.decodePasteControlSequences(text) : text;
+		return decoded
+			.replace(/\r\n?/g, "\n")
+			.replace(/\t/g, "    ")
+			.split("")
+			.filter((char) => char === "\n" || char.charCodeAt(0) >= 32)
+			.join("");
+	}
+
+	private decodePasteControlSequences(text: string): string {
+		// Some terminals/tmux configurations encode control bytes inside bracketed
+		// paste as CSI-u Ctrl+<letter> sequences. Decode those back before filtering.
+		return text.replace(/\x1b\[(\d+);5u/g, (match, code: string) => {
+			const cp = Number(code);
+			if (cp >= 97 && cp <= 122) return String.fromCharCode(cp - 96);
+			if (cp >= 65 && cp <= 90) return String.fromCharCode(cp - 64);
+			return match;
+		});
+	}
+
+	private pasteIntoOutline(text: string): void {
+		if (this.model.isBlank() && text.split("\n").some((line) => /^(\s*)((?:-\s+)+)(.*)$/.test(line))) {
+			this.model = OutlineModel.fromMarkdown(text);
+			return;
+		}
+		this.model.pasteText(text);
 	}
 
 	private run(op: () => void, clearHistoryBrowse = true): void {
@@ -421,8 +478,10 @@ export class PromptChainEditor extends CustomEditor {
 		const text = this.model.textOf(row.id);
 
 		const firstPrefix = `${firstBranch.styled}${glyph} ${isBash ? thm.fg("muted", cmdMark) : ""}`;
-		const contPrefix = `${contBranch.styled}${" ".repeat(2 + cmdMark.length)}`;
 		const chunks = wrapText(text, textW);
+		// Wrapped continuation lines keep a dim vertical guide where the node glyph
+		// was, so long text does not visually cut off the outline branch.
+		const contPrefix = `${contBranch.styled}${chunks.length > 1 ? thm.fg("dim", BRANCH) : "  "}${" ".repeat(cmdMark.length)}`;
 		const lines: string[] = [];
 		let caretLine = 0;
 		for (let li = 0; li < chunks.length; li++) {
@@ -451,9 +510,10 @@ export class PromptChainEditor extends CustomEditor {
 		const b = this.model.cursorBash();
 		if (!state || !b || b.id !== state.id || maxHeight <= 0) return [];
 
-		const count = Math.min(maxHeight, state.items.length);
-		const start = Math.max(0, Math.min(state.selected - count + 1, state.items.length - count));
 		const rows: string[] = [];
+		rows.push(thm.fg("dim", truncateToWidth(`   (${state.selected + 1}/${state.items.length})`, width, "…")));
+		const count = Math.min(Math.max(0, maxHeight - 1), state.items.length);
+		const start = Math.max(0, Math.min(state.selected - count + 1, state.items.length - count));
 		for (let k = 0; k < count; k++) {
 			const idx = start + k;
 			const item = state.items[idx]!;
@@ -503,10 +563,9 @@ export class PromptChainEditor extends CustomEditor {
 		const boxHeight = Math.max(4, Math.floor(termHeight * PROMPT_HEIGHT_RATIO));
 		const outlineHeight = boxHeight - 2; // minus the two bar rows (hints are in the footer)
 
-		// Command mode: the typed /command stays inside the box, but its slash
-		// command menu is moved OUT of the text area to sit below the bottom prompt
-		// bar (between the box and the footer). Total height stays == boxHeight by
-		// stealing interior rows for the menu, so the differential renderer is stable.
+		// Command mode: move the typed /command OUTSIDE the prompt box, directly
+		// below the bottom bar, with the slash-command menu under it. Total height
+		// stays == boxHeight by stealing interior rows for the command/menu lines.
 		if (this.commandMode) {
 			const base = super.render(W); // [topBorder, ...input, bottomBorder, ...menu]
 			const ed = this as unknown as {
@@ -514,19 +573,17 @@ export class PromptChainEditor extends CustomEditor {
 				autocompleteList?: { render(w: number): string[] };
 			};
 			const rawMenu = ed.autocompleteState && ed.autocompleteList ? ed.autocompleteList.render(W) : [];
-			// Keep at least one input row visible inside the box.
 			const menuH = Math.min(rawMenu.length, Math.max(0, outlineHeight - 1));
 			const menu = rawMenu.slice(0, menuH);
 			// Strip the borders + menu from `base`, leaving just the input line(s).
 			const inputLines = base.slice(1, Math.max(1, base.length - rawMenu.length - 1));
-			const interiorH = outlineHeight - menuH;
+			const commandLine = truncateToWidth(inputLines[0] ?? "", W, "");
+			const interiorH = Math.max(0, outlineHeight - 1 - menuH);
 			const interior: string[] = [];
-			for (let k = 0; k < interiorH; k++) {
-				interior.push(bgFillLine(truncateToWidth(inputLines[k] ?? "", W, ""), W, PANEL_BG));
-			}
-			// Transparent menu: no background fill, just the styled menu lines.
+			for (let k = 0; k < interiorH; k++) interior.push(bgFillLine("", W, PANEL_BG));
+			// Transparent command/menu: no background fill, just styled text.
 			const menuLines = menu.map((l) => truncateToWidth(l, W, ""));
-			return [topBar, ...interior, bottomBar, ...menuLines];
+			return [topBar, ...interior, bottomBar, commandLine, ...menuLines];
 		}
 
 		// Flatten to a list of display LINES (a node may wrap to several), plus a

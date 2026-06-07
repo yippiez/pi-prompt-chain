@@ -17,6 +17,7 @@ Replaces the prompt with an outline of nodes. Build a tree, drop in bash nodes, 
 - `^r` — run the bash node inline (stdout renders in a box beneath it)
 - `^s` — compose the selected nodes into markdown and send
 - `^t` — cycle thinking level
+- `^o` — pi's built-in collapse / expand tool output
 - `/` — slash commands
 
 There is no hot reload — restart pi to pick up changes. The outline is in-memory only (not persisted between sessions).
@@ -28,7 +29,8 @@ Collapses each built-in tool call (`read`, `bash`, `edit`, `write`, `grep`, `fin
 - Execution is untouched; only the rendering is overridden.
 - The tool name is bold and given a unique color hashed from its name, so any tool — including ones not listed — gets a stable, distinct color.
 - The argument (path / command / pattern) is muted gray.
-- On success the call line stands alone; on error a single red line is shown.
+- On success the collapsed call line stands alone; on error a single red line is shown.
+- `Ctrl+O` shows detailed views only for `bash` output and `edit` diffs.
 
 It is **not** auto-loaded. Load it explicitly (or use `./run_pi-single-line-tool-calls.sh`), optionally skipping discovery for a clean view without the outline editor:
 
