@@ -30,7 +30,7 @@ Collapses each built-in tool call (`read`, `bash`, `edit`, `write`, `grep`, `fin
 - The tool name is bold and given a unique color hashed from its name, so any tool — including ones not listed — gets a stable, distinct color.
 - The argument (path / command / pattern) is muted gray.
 - On success the collapsed call line stands alone; on error a single red line is shown.
-- `Ctrl+O` shows detailed views only for `bash` output and `edit` diffs.
+- `Ctrl+O` shows detailed views for `bash`, `ls`, and `grep` output, plus `edit` diffs.
 
 It is **not** auto-loaded. Load it explicitly (or use `./run_pi-single-line-tool-calls.sh`), optionally skipping discovery for a clean view without the outline editor:
 

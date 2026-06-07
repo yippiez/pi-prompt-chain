@@ -34,6 +34,7 @@ import { Container, Text, truncateToWidth, visibleWidth } from "@earendil-works/
 
 const LEFT_PAD = " "; // align compact tool rows with thinking/output transcript rows
 const MAX_ARG = 75; // truncate the one-line arg so a padded row never wraps
+const BASH_DETAIL_MAX_LINES = 5;
 
 function fit(s: string): string {
 	return s.length > MAX_ARG ? `${s.slice(0, MAX_ARG - 1)}…` : s;
@@ -74,22 +75,38 @@ function resultText(result: { content?: Array<{ type: string; text?: string }> }
 	return result.content?.map((part) => (part.type === "text" ? (part.text ?? "") : "")).filter(Boolean).join("\n") ?? "";
 }
 
-function renderBashDetails(text: string, theme: any): RenderLines {
+function sanitizeDetailText(text: string): string {
+	return text
+		.replace(/\r\n?/g, "\n")
+		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "") // OSC escapes
+		.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "") // CSI/SGR escapes
+		.replace(/\x1b[ -/]*[@-~]/g, "") // other one-shot ESC sequences
+		.replace(/\t/g, "   ")
+		.split("")
+		.filter((char) => char === "\n" || char.charCodeAt(0) >= 32)
+		.join("");
+}
+
+function renderBoxDetails(text: string, labelText: string, theme: any): RenderLines {
 	return new RenderLines((width) => {
 		const indent = LEFT_PAD;
-		const boxW = Math.max(8, Math.min(104, width - visibleWidth(indent) - 1));
+		const boxW = Math.max(1, Math.min(104, width - visibleWidth(indent) - 1));
 		const innerW = Math.max(1, boxW - 4);
-		const dim = (s: string) => theme.fg("dim", s);
-		const label = " stdout ";
-		const lines = text.replace(/\n+$/, "").split("\n");
+		const dimLine = (s: string) => theme.fg("dim", truncateToWidth(s, width, ""));
+		const label = truncateToWidth(` ${labelText} `, Math.max(0, boxW - 2), "");
+		const clean = sanitizeDetailText(text).replace(/\n+$/, "");
+		const lines = clean.length > 0 ? clean.split("\n") : [""];
+		const visibleLines = lines.slice(0, BASH_DETAIL_MAX_LINES);
+		const hidden = Math.max(0, lines.length - visibleLines.length);
 		const out: string[] = [];
-		out.push(dim(`${indent}╭${label}${"─".repeat(Math.max(0, boxW - 2 - visibleWidth(label)))}╮`));
-		for (const raw of lines.length > 0 ? lines : [""]) {
+		out.push(dimLine(`${indent}╭${label}${"─".repeat(Math.max(0, boxW - 2 - visibleWidth(label)))}╮`));
+		for (const raw of visibleLines) {
 			let cell = truncateToWidth(raw, innerW, "…");
 			cell += " ".repeat(Math.max(0, innerW - visibleWidth(cell)));
-			out.push(dim(`${indent}│ ${cell} │`));
+			out.push(dimLine(`${indent}│ ${cell} │`));
 		}
-		out.push(dim(`${indent}╰${"─".repeat(Math.max(0, boxW - 2))}╯`));
+		const tag = hidden > 0 ? truncateToWidth(` ↓${hidden} `, Math.max(0, boxW - 2), "") : "";
+		out.push(dimLine(`${indent}╰${"─".repeat(Math.max(0, boxW - 2 - visibleWidth(tag)))}${tag}╯`));
 		return out;
 	});
 }
@@ -149,9 +166,10 @@ export default function (pi: ExtensionAPI) {
 			},
 
 			renderCall(args, theme, _context) {
-				// Tool name: a unique color hashed from the tool's name.
+				// Bash is always red; other tool names get a unique color hashed from name.
 				// Content: muted gray.
-				let line = `${LEFT_PAD}${colorName(spec.name, spec.verb)} `;
+				const toolName = spec.name === "bash" ? theme.fg("error", theme.bold(spec.verb)) : colorName(spec.name, spec.verb);
+				let line = `${LEFT_PAD}${toolName} `;
 				line += theme.fg("muted", fit(String(spec.arg(args) ?? "")));
 				return new Text(line, 0, 0);
 			},
@@ -163,7 +181,9 @@ export default function (pi: ExtensionAPI) {
 				const isError = Boolean(details?.error || details?.blocked) || /^Error/i.test(text);
 
 				if (options.expanded) {
-					if (spec.name === "bash") return renderBashDetails(text, theme) as any;
+					if (spec.name === "bash") return renderBoxDetails(text, "stdout", theme) as any;
+					if (spec.name === "ls") return renderBoxDetails(text, "ls", theme) as any;
+					if (spec.name === "grep") return renderBoxDetails(text, "grep", theme) as any;
 					if (spec.name === "edit") return renderEditDetails(context.args, result, isError, theme) as any;
 				}
 
