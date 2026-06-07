@@ -1,6 +1,6 @@
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth, type AutocompleteItem, type AutocompleteProvider, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
-import { OutlineModel, type NodeId, type VisibleRow } from "./nodes.ts";
+import { OutlineModel, type NodeId, type OutlineSnapshot, type VisibleRow } from "./nodes.ts";
 import { BOX_CONTENT_H, BOX_MAX_W, BRANCH, BRANCH_BLANK, BRANCH_ELBOW, BRANCH_TEE, CURSOR_ROW_BG, NODE_FILLED, NODE_OPEN, PANEL_BG, PROMPT_HEIGHT_RATIO, bgFillLine, fitBorder, formatContext, formatCwd, sanitizeOutput, sliceDisplayWidth, wrapText } from "./render.ts";
 
 /** Mirrors @earendil-works/pi-agent-core's ThinkingLevel (not re-exported here). */
@@ -21,6 +21,9 @@ export class PromptChainEditor extends CustomEditor {
 	private bashCompletion:
 		| { id: NodeId; prefix: string; items: AutocompleteItem[]; selected: number }
 		| undefined;
+	private outlineHistory: OutlineSnapshot[] = [];
+	private historyIndex: number | undefined;
+	private historyDraft: OutlineSnapshot | undefined;
 
 	constructor(
 		tui: TUI,
@@ -52,6 +55,20 @@ export class PromptChainEditor extends CustomEditor {
 		super.setAutocompleteProvider(provider);
 	}
 
+	override setText(text: string): void {
+		// App-level actions such as Alt+Up restore queued messages by calling
+		// editor.setText(). In outline mode, convert that restored text into outline
+		// nodes instead of leaving it in CustomEditor's hidden text buffer.
+		if (!this.commandMode && text.length > 0 && !text.startsWith("/")) {
+			this.model = OutlineModel.fromMarkdown(text);
+			this.stopHistoryBrowse();
+			super.setText("");
+			this.activeTui?.requestRender();
+			return;
+		}
+		super.setText(text);
+	}
+
 	/** Clear timers on shutdown so the refresh interval doesn't outlive the session. */
 	async dispose(): Promise<void> {
 		if (this.refreshTimer) {
@@ -64,6 +81,11 @@ export class PromptChainEditor extends CustomEditor {
 
 	override handleInput(data: string): void {
 		const m = this.model;
+
+		// The base CustomEditor has its own hidden text buffer. Keep it empty while
+		// we are in outline mode so app-level actions cannot leave stale text that
+		// later breaks slash-command mode.
+		if (!this.commandMode && this.getText().length > 0) this.setText("");
 
 		if (this.bashCompletion) {
 			if (this.handleBashCompletionInput(data)) return;
@@ -88,6 +110,7 @@ export class PromptChainEditor extends CustomEditor {
 		}
 		// "/" on an empty node enters command mode and delegates to the base editor.
 		if (data === "/" && m.cursor.col === 0 && m.getNode(m.cursor.id)?.kind === "node" && m.textOf(m.cursor.id).length === 0) {
+			this.setText("");
 			this.commandMode = true;
 			super.handleInput("/");
 			this.activeTui.requestRender();
@@ -100,8 +123,18 @@ export class PromptChainEditor extends CustomEditor {
 		if (matchesKey(data, "shift+tab")) return this.run(() => m.outdent());
 		if (matchesKey(data, "alt+shift+up") || matchesKey(data, "shift+alt+up")) return this.run(() => m.moveNodeUp());
 		if (matchesKey(data, "alt+shift+down") || matchesKey(data, "shift+alt+down")) return this.run(() => m.moveNodeDown());
-		if (matchesKey(data, Key.up)) return this.run(() => m.moveCaretUp());
-		if (matchesKey(data, Key.down)) return this.run(() => m.moveCaretDown());
+		// Browse sent-outline history only with Alt+Up/Down, not plain arrows, so
+		// normal navigation at the first/last node cannot accidentally replace the draft.
+		if (matchesKey(data, "alt+up")) {
+			this.navigateOutlineHistory(-1);
+			return;
+		}
+		if (matchesKey(data, "alt+down")) {
+			this.navigateOutlineHistory(1);
+			return;
+		}
+		if (matchesKey(data, Key.up)) return this.run(() => m.moveCaretUp(), false);
+		if (matchesKey(data, Key.down)) return this.run(() => m.moveCaretDown(), false);
 		if (matchesKey(data, Key.left)) return this.run(() => m.moveCaretLeft());
 		if (matchesKey(data, Key.right)) return this.run(() => m.moveCaretRight());
 		if (matchesKey(data, Key.home)) return this.run(() => m.caretHome());
@@ -129,19 +162,71 @@ export class PromptChainEditor extends CustomEditor {
 			}
 		}
 
-		// Printable char, or a paste (multi-char without control bytes).
+		// Printable char, or a paste. Bracketed paste includes control bytes, and
+		// multi-line clipboard text includes newlines, so handle it before falling
+		// through to the base editor.
 		if (data.length === 1 && data.charCodeAt(0) >= 32) return this.run(() => m.insertChar(data));
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: detecting control bytes
-		if (data.length > 1 && !/[\x00-\x1f]/.test(data)) return this.run(() => m.insertChar(data));
+		const paste = this.normalizePaste(data);
+		if (paste !== undefined) return this.run(() => m.pasteText(paste));
 
 		// Escape (abort), Ctrl+D (exit), Ctrl+P (model cycle), shortcuts -> app.
 		super.handleInput(data);
 	}
 
-	private run(op: () => void): void {
+	private normalizePaste(data: string): string | undefined {
+		if (data.length <= 1) return undefined;
+		let text = data;
+		if (text.startsWith("\x1b[200~") && text.endsWith("\x1b[201~")) {
+			text = text.slice("\x1b[200~".length, -"\x1b[201~".length);
+		}
+		// If it is still an escape/control sequence without printable paste content,
+		// let the app handle it as a keybinding instead.
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: distinguishing paste from key escape sequences
+		if (!text.includes("\n") && /[\x00-\x08\x0b-\x1f\x7f]/.test(text)) return undefined;
+		return text;
+	}
+
+	private run(op: () => void, clearHistoryBrowse = true): void {
 		this.bashCompletion = undefined;
+		if (clearHistoryBrowse) this.stopHistoryBrowse();
 		op();
 		this.activeTui.requestRender();
+	}
+
+	private stopHistoryBrowse(): void {
+		this.historyIndex = undefined;
+		this.historyDraft = undefined;
+	}
+
+	private navigateOutlineHistory(dir: -1 | 1): boolean {
+		if (this.outlineHistory.length === 0) return false;
+		const rows = this.model.visibleRows();
+		const rowIdx = rows.findIndex((row) => row.id === this.model.cursor.id);
+		if (dir < 0 && rowIdx > 0) return false;
+		if (dir > 0 && rowIdx !== -1 && rowIdx < rows.length - 1) return false;
+
+		if (this.historyIndex === undefined) {
+			if (dir > 0) return false;
+			this.historyDraft = this.model.snapshot();
+			this.historyIndex = this.outlineHistory.length - 1;
+		} else {
+			this.historyIndex += dir;
+		}
+
+		if (this.historyIndex < 0) {
+			this.historyIndex = 0;
+			return false;
+		}
+		if (this.historyIndex >= this.outlineHistory.length) {
+			if (this.historyDraft) this.model = OutlineModel.fromSnapshot(this.historyDraft);
+			this.stopHistoryBrowse();
+			this.activeTui.requestRender();
+			return true;
+		}
+
+		this.model = OutlineModel.fromSnapshot(this.outlineHistory[this.historyIndex]!);
+		this.activeTui.requestRender();
+		return true;
 	}
 
 	private handleBashCompletionInput(data: string): boolean {
@@ -217,8 +302,10 @@ export class PromptChainEditor extends CustomEditor {
 	private sendOutline(): void {
 		const md = this.model.composeMarkdown();
 		if (!md.trim()) return;
+		this.outlineHistory.push(this.model.snapshot());
+		this.stopHistoryBrowse();
 		// isIdle() lives on the ExtensionContext, not the ExtensionAPI.
-		this.pi.sendUserMessage(md, this.ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+		this.pi.sendUserMessage(md, this.ctx.isIdle() ? undefined : { deliverAs: "steer" });
 		// Clear the outline — reset to a single empty root node.
 		this.model = new OutlineModel(new Map(), [], new Set());
 		this.activeTui.requestRender();

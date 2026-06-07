@@ -43,6 +43,13 @@ export type AnyNode = Node | BashNode;
 /** Flat id→node store; children are resolved through it by UUID. */
 export type NodeStore = Map<NodeId, AnyNode>;
 
+export interface OutlineSnapshot {
+	store: [NodeId, AnyNode][];
+	roots: NodeId[];
+	collapsed: NodeId[];
+	cursor: { id: NodeId; col: number };
+}
+
 /* node factories — every node gets a fresh UUID */
 
 export function createNode(text = "", children: NodeId[] = []): Node {
@@ -75,6 +82,125 @@ export class OutlineModel {
 		private collapsed: Set<NodeId>,
 	) {
 		this.ensureNonEmpty();
+	}
+
+	static fromMarkdown(text: string): OutlineModel {
+		const store: NodeStore = new Map();
+		const roots: NodeId[] = [];
+		const stack: NodeId[] = [];
+		let parsedAny = false;
+		let lastBash: { node: BashNode; depth: number } | undefined;
+		let bashOutput: { node: BashNode; indent: number } | undefined;
+
+		for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
+			if (bashOutput) {
+				if (line.trim() === "</bash-output>") {
+					bashOutput = undefined;
+					continue;
+				}
+				const pad = " ".repeat(bashOutput.indent);
+				const outLine = line.startsWith(pad) ? line.slice(pad.length) : line;
+				bashOutput.node.output = bashOutput.node.output === undefined ? outLine : `${bashOutput.node.output}\n${outLine}`;
+				continue;
+			}
+
+			if (lastBash && line.trim().startsWith("<bash-output")) {
+				bashOutput = { node: lastBash.node, indent: line.match(/^\s*/)?.[0].length ?? 0 };
+				lastBash.node.output = undefined;
+				continue;
+			}
+
+			// Restore both normal markdown list shape (`  - child`) and accidentally
+			// re-wrapped outline shape (`- - child`, `-   - child`) without keeping the
+			// literal bullet markers in node text.
+			const match = line.match(/^(\s*)((?:-\s+)+)(.*)$/);
+			if (!match) {
+				// Bash output is composed as indented plain lines after a bash bullet.
+				// Reattach those lines to the bash node instead of turning them into text nodes.
+				if (lastBash) {
+					const minIndent = (lastBash.depth + 1) * 2;
+					const indent = line.match(/^\s*/)?.[0].length ?? 0;
+					if (indent >= minIndent || line.length === 0) {
+						const outLine = line.length === 0 ? "" : line.slice(Math.min(indent, minIndent));
+						lastBash.node.output = lastBash.node.output === undefined ? outLine : `${lastBash.node.output}\n${outLine}`;
+					}
+				}
+				continue;
+			}
+
+			parsedAny = true;
+			const bulletCount = [...match[2]!.matchAll(/-/g)].length;
+			const depth = Math.floor(match[1]!.length / 2) + bulletCount - 1;
+			const raw = match[3] ?? "";
+			const bashMatch = raw.match(/^`\$\s(.*)`$/);
+			const node = bashMatch
+				? ({ id: randomUUID(), kind: "bash", command: bashMatch[1] ?? "", children: [] } satisfies BashNode)
+				: createNode(raw);
+			store.set(node.id, node);
+
+			stack.length = depth;
+			const parentId = stack[depth - 1];
+			if (parentId) store.get(parentId)?.children.push(node.id);
+			else roots.push(node.id);
+			stack[depth] = node.id;
+			lastBash = node.kind === "bash" ? { node, depth } : undefined;
+		}
+
+		if (!parsedAny) {
+			const model = new OutlineModel(new Map(), [], new Set());
+			model.pasteText(text);
+			return model;
+		}
+		return new OutlineModel(store, roots, new Set());
+	}
+
+	static fromSnapshot(snapshot: OutlineSnapshot): OutlineModel {
+		const store: NodeStore = new Map(
+			snapshot.store.map(([id, node]) => [
+				id,
+				node.kind === "node"
+					? { id: node.id, kind: "node", text: node.text, children: [...node.children] }
+					: {
+							id: node.id,
+							kind: "bash",
+							command: node.command,
+							output: node.output,
+							exitCode: node.exitCode,
+							children: [...node.children],
+						},
+			]),
+		);
+		const model = new OutlineModel(store, [...snapshot.roots], new Set(snapshot.collapsed));
+		model.cursor = { ...snapshot.cursor };
+		model.clampCol();
+		return model;
+	}
+
+	snapshot(): OutlineSnapshot {
+		return {
+			store: [...this.store.entries()].map(([id, node]) => [
+				id,
+				node.kind === "node"
+					? { id: node.id, kind: "node", text: node.text, children: [...node.children] }
+					: {
+							id: node.id,
+							kind: "bash",
+							command: node.command,
+							output: node.output,
+							exitCode: node.exitCode,
+							children: [...node.children],
+						},
+			]),
+			roots: [...this.roots],
+			collapsed: [...this.collapsed],
+			cursor: { ...this.cursor },
+		};
+	}
+
+	isBlank(): boolean {
+		if (this.roots.length !== 1) return false;
+		const node = this.store.get(this.roots[0]!);
+		return !!node && node.kind === "node" && node.text.length === 0 && node.children.length === 0;
 	}
 
 	/* ---- invariants / helpers ---- */
@@ -186,6 +312,32 @@ export class OutlineModel {
 		const col = this.cursor.col;
 		if (col >= text.length) return;
 		this.setNodeText(this.cursor.id, text.slice(0, col) + text.slice(col + 1));
+	}
+
+	pasteText(raw: string): void {
+		const text = raw.replace(/\r\n?/g, "\n").replace(/\t/g, "    ");
+		if (!text.includes("\n")) {
+			this.insertChar(text);
+			return;
+		}
+
+		const id = this.cursor.id;
+		const current = this.textOf(id);
+		const before = current.slice(0, this.cursor.col);
+		const after = current.slice(this.cursor.col);
+		const lines = text.split("\n");
+		this.setNodeText(id, before + (lines[0] ?? ""));
+
+		let prevId = id;
+		for (let i = 1; i < lines.length; i++) {
+			const isLast = i === lines.length - 1;
+			const fresh = createNode((lines[i] ?? "") + (isLast ? after : ""));
+			this.store.set(fresh.id, fresh);
+			this.insertAfter(prevId, fresh.id);
+			prevId = fresh.id;
+		}
+		const lastPastedLen = lines[lines.length - 1]?.length ?? 0;
+		this.cursor = { id: prevId, col: lastPastedLen };
 	}
 
 	/* ---- structural ops ---- */
@@ -427,7 +579,11 @@ export class OutlineModel {
 			if (node.kind === "bash") {
 				out.push(`${indent}- \`$ ${node.command}\``);
 				const body = (node.output ?? "").replace(/\n+$/, "");
-				if (body) for (const l of body.split("\n")) out.push(`${indent}  ${l}`);
+				if (body) {
+					out.push(`${indent}  <bash-output exit-code="${node.exitCode ?? 0}">`);
+					for (const l of body.split("\n")) out.push(`${indent}  ${l}`);
+					out.push(`${indent}  </bash-output>`);
+				}
 			} else {
 				out.push(`${indent}- ${this.textOf(id)}`);
 			}
