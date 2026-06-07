@@ -15,6 +15,7 @@ Build a tree, drop in bash nodes, multi-select rows to compose one markdown prom
 - `^s` — compose the selected nodes into markdown and send
 - `^t` — cycle thinking level
 - `^o` — pi's built-in collapse / expand tool output
+- `@` — file reference completion; referenced text files are included when sent
 - `^f` — bash path completion for bash nodes
 - `/` — slash commands
 

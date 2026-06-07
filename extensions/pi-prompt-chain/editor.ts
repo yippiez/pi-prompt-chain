@@ -1,3 +1,5 @@
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth, type AutocompleteItem, type AutocompleteProvider, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { OutlineModel, type NodeId, type OutlineSnapshot, type VisibleRow } from "./nodes.ts";
@@ -18,9 +20,10 @@ export class PromptChainEditor extends CustomEditor {
 	private boxScroll = new Map<NodeId, number>(); // per bash node: vertical output box scroll offset
 	private boxHScroll = new Map<NodeId, number>(); // per bash node: horizontal output box scroll offset
 	private autocompleteProvider: AutocompleteProvider | undefined;
-	private bashCompletion:
-		| { id: NodeId; prefix: string; items: AutocompleteItem[]; selected: number }
+	private completion:
+		| { id: NodeId; prefix: string; items: AutocompleteItem[]; selected: number; source: "at" | "bash" }
 		| undefined;
+	private completionRequestId = 0;
 	private isInPaste = false;
 	private pasteBuffer = "";
 	private outlineHistory: OutlineSnapshot[] = [];
@@ -116,9 +119,9 @@ export class PromptChainEditor extends CustomEditor {
 
 		if (this.handleOutlinePasteInput(data)) return;
 
-		if (this.bashCompletion) {
-			if (this.handleBashCompletionInput(data)) return;
-			this.bashCompletion = undefined;
+		if (this.completion) {
+			if (this.handleCompletionInput(data)) return;
+			this.completion = undefined;
 		}
 
 		if (matchesKey(data, Key.enter)) return this.run(() => m.enter());
@@ -144,7 +147,9 @@ export class PromptChainEditor extends CustomEditor {
 		if (matchesKey(data, Key.home)) return this.run(() => m.caretHome());
 		if (matchesKey(data, Key.end)) return this.run(() => m.caretEnd());
 		if (matchesKey(data, "backspace")) {
-			return this.run(() => (m.cursor.col > 0 ? m.deleteCharBefore() : m.backspaceMerge()));
+			this.run(() => (m.cursor.col > 0 ? m.deleteCharBefore() : m.backspaceMerge()));
+			void this.maybeOpenAtCompletion();
+			return;
 		}
 		if (matchesKey(data, Key.delete)) return this.run(() => m.deleteCharAfter());
 		if (matchesKey(data, Key.ctrl("space"))) return this.run(() => m.toggleCollapse());
@@ -167,7 +172,11 @@ export class PromptChainEditor extends CustomEditor {
 		}
 
 		// Printable char.
-		if (data.length === 1 && data.charCodeAt(0) >= 32) return this.run(() => m.insertChar(data));
+		if (data.length === 1 && data.charCodeAt(0) >= 32) {
+			this.run(() => m.insertChar(data));
+			void this.maybeOpenAtCompletion();
+			return;
+		}
 
 		// Escape (abort), Ctrl+D (exit), Ctrl+P (model cycle), shortcuts -> app.
 		super.handleInput(data);
@@ -244,7 +253,7 @@ export class PromptChainEditor extends CustomEditor {
 	}
 
 	private run(op: () => void, clearHistoryBrowse = true): void {
-		this.bashCompletion = undefined;
+		this.completion = undefined;
 		if (clearHistoryBrowse) this.stopHistoryBrowse();
 		op();
 		this.activeTui.requestRender();
@@ -286,13 +295,12 @@ export class PromptChainEditor extends CustomEditor {
 		return true;
 	}
 
-	private handleBashCompletionInput(data: string): boolean {
-		const state = this.bashCompletion;
-		const b = this.model.cursorBash();
-		if (!state || !b || b.id !== state.id) return false;
+	private handleCompletionInput(data: string): boolean {
+		const state = this.completion;
+		if (!state || this.model.cursor.id !== state.id || state.items.length === 0) return false;
 
 		if (matchesKey(data, "escape")) {
-			this.bashCompletion = undefined;
+			this.completion = undefined;
 			this.activeTui.requestRender();
 			return true;
 		}
@@ -301,13 +309,13 @@ export class PromptChainEditor extends CustomEditor {
 			this.activeTui.requestRender();
 			return true;
 		}
-		if (matchesKey(data, Key.down) || matchesKey(data, Key.ctrl("f"))) {
+		if (matchesKey(data, Key.down) || (state.source === "bash" && matchesKey(data, Key.ctrl("f")))) {
 			state.selected = (state.selected + 1) % state.items.length;
 			this.activeTui.requestRender();
 			return true;
 		}
 		if (matchesKey(data, Key.enter) || matchesKey(data, "tab")) {
-			this.applyBashCompletion(state.selected);
+			this.applyCompletion(state.selected);
 			return true;
 		}
 		return false;
@@ -338,34 +346,141 @@ export class PromptChainEditor extends CustomEditor {
 			.catch(() => null);
 		if (!suggestions || suggestions.items.length === 0) return;
 
-		this.bashCompletion = { id: b.id, prefix: suggestions.prefix, items: suggestions.items, selected: 0 };
+		this.completion = { id: b.id, prefix: suggestions.prefix, items: suggestions.items, selected: 0, source: "bash" };
 		this.activeTui.requestRender();
 	}
 
-	private applyBashCompletion(index: number): void {
-		const state = this.bashCompletion;
-		const b = this.model.cursorBash();
-		if (!state || !b || b.id !== state.id || !this.autocompleteProvider) return;
+	private atPrefixBeforeCursor(): string | null {
+		const text = this.model.textOf(this.model.cursor.id).slice(0, this.model.cursor.col);
+		const quoted = text.match(/(?:^|\s)(@"[^"]*)$/);
+		if (quoted) return quoted[1] ?? null;
+		const unquoted = text.match(/(?:^|\s)(@[^\s@]*)$/);
+		return unquoted?.[1] ?? null;
+	}
+
+	/** Open/update @file completions for outline text using pi's built-in provider. */
+	private async maybeOpenAtCompletion(): Promise<void> {
+		if (!this.autocompleteProvider) return;
+		const prefix = this.atPrefixBeforeCursor();
+		if (!prefix) {
+			if (this.completion?.source === "at") {
+				this.completion = undefined;
+				this.activeTui.requestRender();
+			}
+			return;
+		}
+
+		const id = this.model.cursor.id;
+		const text = this.model.textOf(id);
+		const col = this.model.cursor.col;
+		const requestId = ++this.completionRequestId;
+		const signal = new AbortController().signal;
+		const suggestions = await this.autocompleteProvider
+			.getSuggestions([text], 0, col, { signal, force: false })
+			.catch(() => null);
+		if (requestId !== this.completionRequestId || this.model.cursor.id !== id || this.model.cursor.col !== col) return;
+		if (!suggestions || suggestions.items.length === 0) {
+			this.completion = undefined;
+		} else {
+			this.completion = { id, prefix: suggestions.prefix, items: suggestions.items, selected: 0, source: "at" };
+		}
+		this.activeTui.requestRender();
+	}
+
+	private applyCompletion(index: number): void {
+		const state = this.completion;
+		if (!state || this.model.cursor.id !== state.id || !this.autocompleteProvider) return;
 		const item = state.items[index];
 		if (!item) return;
 
-		const applied = this.autocompleteProvider.applyCompletion([b.command], 0, this.model.cursor.col, item, state.prefix);
+		const text = this.model.textOf(state.id);
+		const applied = this.autocompleteProvider.applyCompletion([text], 0, this.model.cursor.col, item, state.prefix);
 		this.model.replaceCursorText(applied.lines.join("\n"), applied.cursorCol);
-		this.bashCompletion = undefined;
+		this.completion = undefined;
 		this.activeTui.requestRender();
 	}
 
 	/** Compose the whole outline as markdown, send it to the agent, and clear. */
-	private sendOutline(): void {
+	private async sendOutline(): Promise<void> {
 		const md = this.model.composeMarkdown();
 		if (!md.trim()) return;
+		const prompt = await this.expandFileReferences(md);
 		this.outlineHistory.push(this.model.snapshot());
 		this.stopHistoryBrowse();
 		// isIdle() lives on the ExtensionContext, not the ExtensionAPI.
-		this.pi.sendUserMessage(md, this.ctx.isIdle() ? undefined : { deliverAs: "steer" });
+		this.pi.sendUserMessage(prompt, this.ctx.isIdle() ? undefined : { deliverAs: "steer" });
 		// Clear the outline — reset to a single empty root node.
 		this.model = new OutlineModel(new Map(), [], new Set());
 		this.activeTui.requestRender();
+	}
+
+	private async expandFileReferences(prompt: string): Promise<string> {
+		const refs = this.findFileReferences(prompt);
+		if (refs.length === 0) return prompt;
+
+		const blocks: string[] = [];
+		const seen = new Set<string>();
+		for (const ref of refs) {
+			const abs = this.resolveReferencePath(ref);
+			if (seen.has(abs)) continue;
+			seen.add(abs);
+			blocks.push(await this.readReferenceBlock(abs));
+		}
+		return `${blocks.join("\n")}\n\n${prompt}`;
+	}
+
+	private findFileReferences(text: string): string[] {
+		const refs: string[] = [];
+		const re = /(?:^|[\s(])@(?:"((?:\\.|[^"\\])*)"|([^\s`"'<>]+))/g;
+		let inBashOutput = false;
+		for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
+			if (line.trim().startsWith("<bash-output")) {
+				inBashOutput = true;
+				continue;
+			}
+			if (inBashOutput) {
+				if (line.trim() === "</bash-output>") inBashOutput = false;
+				continue;
+			}
+			// Bash command nodes are context already; don't treat @ inside shell commands as file attachments.
+			if (/^\s*-\s+`\$\s/.test(line)) continue;
+			for (const match of line.matchAll(re)) {
+				const raw = match[1] ?? match[2] ?? "";
+				const cleaned = this.cleanReferencePath(raw);
+				if (cleaned.length > 0) refs.push(cleaned);
+			}
+		}
+		return refs;
+	}
+
+	private cleanReferencePath(raw: string): string {
+		let p = raw.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+		// Common sentence punctuation should not become part of an unquoted @path.
+		while (/[.,;:!?)]$/.test(p)) p = p.slice(0, -1);
+		return p;
+	}
+
+	private resolveReferencePath(ref: string): string {
+		const withHome = ref === "~" || ref.startsWith("~/") ? path.join(process.env.HOME ?? "", ref.slice(1)) : ref;
+		return path.resolve(this.ctx.cwd, withHome);
+	}
+
+	private async readReferenceBlock(abs: string): Promise<string> {
+		const name = this.escapeXml(abs);
+		try {
+			const st = await stat(abs);
+			if (st.isDirectory()) return `<file name="${name}">[Directory reference; use read/list tools for contents.]</file>`;
+			if (st.size === 0) return `<file name="${name}">[Empty file.]</file>`;
+			const content = await readFile(abs, "utf8");
+			return `<file name="${name}">\n${content}\n</file>`;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return `<file name="${name}">[Could not read file: ${this.escapeXml(message)}]</file>`;
+		}
+	}
+
+	private escapeXml(s: string): string {
+		return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 	}
 
 	/** Ctrl+T: scroll to the agent's next thinking level. Replaces the built-in
@@ -505,10 +620,9 @@ export class PromptChainEditor extends CustomEditor {
 		return { lines, caretLine };
 	}
 
-	private renderBashCompletionMenu(width: number, maxHeight: number, thm: ExtensionContext["ui"]["theme"]): string[] {
-		const state = this.bashCompletion;
-		const b = this.model.cursorBash();
-		if (!state || !b || b.id !== state.id || maxHeight <= 0) return [];
+	private renderCompletionMenu(width: number, maxHeight: number, thm: ExtensionContext["ui"]["theme"]): string[] {
+		const state = this.completion;
+		if (!state || this.model.cursor.id !== state.id || maxHeight <= 0) return [];
 
 		const rows: string[] = [];
 		rows.push(thm.fg("dim", truncateToWidth(`   (${state.selected + 1}/${state.items.length})`, width, "…")));
@@ -610,10 +724,10 @@ export class PromptChainEditor extends CustomEditor {
 			if (isCur) cursorKeepEnd = Math.max(cursorDisp, display.length - 1);
 		}
 
-		// Bash completion dropdown renders like the slash-command menu: transparent,
-		// outside the prompt box, above the top bar. It does not steal rows from the
-		// outline viewport, so the prompt/outline size does not change.
-		const completionMenu = this.renderBashCompletionMenu(W, Math.max(0, Math.min(6, outlineHeight - 1)), thm);
+		// File/path completion dropdown renders like the slash-command menu:
+		// transparent, outside the prompt box, below the bottom bar. It does not
+		// steal rows from the outline viewport, so the prompt/outline size stays put.
+		const completionMenu = this.renderCompletionMenu(W, Math.max(0, Math.min(6, outlineHeight - 1)), thm);
 		const viewportHeight = outlineHeight;
 
 		// Viewport over display lines. Follow the actual wrapped caret line, and if
@@ -633,6 +747,6 @@ export class PromptChainEditor extends CustomEditor {
 			else interiorLines.push(bgFillLine(truncateToWidth(d.text, W, ""), W, d.cursor ? CURSOR_ROW_BG : PANEL_BG));
 		}
 
-		return [...completionMenu, topBar, ...interiorLines, bottomBar];
+		return [topBar, ...interiorLines, bottomBar, ...completionMenu];
 	}
 }
