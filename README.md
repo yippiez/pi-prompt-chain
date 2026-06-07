@@ -1,13 +1,10 @@
 # pi-prompt-chain
 
-`pi-prompt-chain` is a Pi package with two extensions:
-
-- **Outline editor** — replaces pi's text prompt with a nestable outline you compose, multi-select, and send.
-- **Single-line tool calls** — collapses every built-in tool call in the transcript to a single, uniquely-colored line.
+`pi-prompt-chain` is a standalone Pi extension that replaces pi's text prompt with a nestable outline editor.
 
 ## Outline editor
 
-Replaces the prompt with an outline of nodes. Build a tree, drop in bash nodes, multi-select rows to compose one markdown prompt, and send it to the agent.
+Build a tree, drop in bash nodes, multi-select rows to compose one markdown prompt, and send it to the agent.
 
 - `⇥` / `⇧⇥` — indent / outdent the current node
 - `↵` — split: append a new sibling node
@@ -18,25 +15,32 @@ Replaces the prompt with an outline of nodes. Build a tree, drop in bash nodes, 
 - `^s` — compose the selected nodes into markdown and send
 - `^t` — cycle thinking level
 - `^o` — pi's built-in collapse / expand tool output
+- `^f` — bash path completion for bash nodes
 - `/` — slash commands
 
 There is no hot reload — restart pi to pick up changes. The outline is in-memory only (not persisted between sessions).
 
-## pi-single-line-tool-calls
-
-Collapses each built-in tool call (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) to one line — `<Tool> <primary arg>` — instead of a boxed multi-line block.
-
-- Execution is untouched; only the rendering is overridden.
-- The tool name is bold and given a unique color hashed from its name, so any tool — including ones not listed — gets a stable, distinct color.
-- The argument (path / command / pattern) is muted gray.
-- On success the collapsed call line stands alone; on error a single red line is shown.
-- `Ctrl+O` shows detailed views for `bash`, `ls`, and `grep` output, plus `edit` diffs.
-
-It is **not** auto-loaded. Load it explicitly (or use `./run_pi-single-line-tool-calls.sh`), optionally skipping discovery for a clean view without the outline editor:
+## Run locally
 
 ```bash
-pi --no-extensions -e extensions/pi-single-line-tool-calls/pi-single-line-tool-calls.ts
+./run.sh
 ```
+
+or:
+
+```bash
+pi --no-extensions -e extensions/pi-prompt-chain/pi-prompt-chain.ts
+```
+
+## Companion extension
+
+Compact tool-call rendering now lives in its own independent package:
+
+```text
+/home/eren/work2/pi-compact-tool-calls
+```
+
+Install/run that package separately, or load both extensions explicitly if you want both behaviors.
 
 ## Install from Git
 

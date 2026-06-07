@@ -1,0 +1,15 @@
+{
+  "name": "pi-prompt-chain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Outline prompt editor for Pi.",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions/pi-prompt-chain/pi-prompt-chain.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
