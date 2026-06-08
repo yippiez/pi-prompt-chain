@@ -594,9 +594,11 @@ export class PromptChainEditor extends CustomEditor {
 
 		const firstPrefix = `${firstBranch.styled}${glyph} ${isBash ? thm.fg("muted", cmdMark) : ""}`;
 		const chunks = wrapText(text, textW);
-		// Wrapped continuation lines keep a dim vertical guide where the node glyph
-		// was, so long text does not visually cut off the outline branch.
-		const contPrefix = `${contBranch.styled}${chunks.length > 1 ? thm.fg("dim", BRANCH) : "  "}${" ".repeat(cmdMark.length)}`;
+		// Wrapped continuation lines only keep a connector in the node-glyph column
+		// when the node actually has children. For leaf nodes, showing a lone vertical
+		// pipe on overflow/wrapped lines incorrectly implies a child connection.
+		const wrapGuide = chunks.length > 1 && row.hasChildren ? thm.fg("dim", BRANCH) : "  ";
+		const contPrefix = `${contBranch.styled}${wrapGuide}${" ".repeat(cmdMark.length)}`;
 		const lines: string[] = [];
 		let caretLine = 0;
 		for (let li = 0; li < chunks.length; li++) {
