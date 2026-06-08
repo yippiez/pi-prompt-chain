@@ -66,7 +66,7 @@ export function wrapText(text: string, width: number): { str: string; start: num
 
 // Muted, compact one-line keybinding hint shown in the footer.
 export function shortcutsText(width: number, thm: ExtensionContext["ui"]["theme"]): string {
-	const parts = ["⇥ indent", "⌥⇧↑/↓ move", "⌥↑/↓ hist", "^⌫ del", "^␣ fold", "@ files", "^s run", "^f path", "^l lang", "Pg scroll", "⌥←/→ xscroll", "^r send", "^t think", "^o tools"];
+	const parts = ["⇥ indent", "⌥⇧↑/↓ move", "⌥↑/↓ hist", "^⌫ del", "^␣ fold", "@ files", "^s run", "^f path", "Pg scroll", "⌥←/→ xscroll", "^r send", "^t think", "^o tools"];
 	return thm.fg("dim", truncateToWidth(` ${parts.join("  ")}`, width, "…"));
 }
 

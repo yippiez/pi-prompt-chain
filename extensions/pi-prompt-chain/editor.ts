@@ -171,16 +171,6 @@ export class PromptChainEditor extends CustomEditor {
 			}
 		}
 
-		// "`" at the start of a plain node turns it into a code block node.
-		// Ctrl+L cycles the language label among supported common languages.
-		if (data === "`") {
-			const node = m.getNode(m.cursor.id);
-			if (node?.kind === "node" && m.cursor.col === 0) {
-				return this.run(() => m.convertCursorToCode());
-			}
-		}
-		if (matchesKey(data, Key.ctrl("l"))) return this.run(() => m.cycleCursorCodeLanguage());
-
 		// Printable char.
 		if (data.length === 1 && data.charCodeAt(0) >= 32) {
 			this.run(() => m.insertChar(data));
@@ -590,22 +580,19 @@ export class PromptChainEditor extends CustomEditor {
 	): { lines: string[]; caretLine: number } {
 		const node = this.model.getNode(row.id);
 		const isBash = node?.kind === "bash";
-		const isCode = node?.kind === "code";
 		const firstBranch = this.branchPrefix(row, false);
 		const contBranch = this.branchPrefix(row, true);
 		const glyph = isBash
 			? thm.fg("error", NODE_FILLED) // red circle for bash nodes
-			: isCode
-				? thm.fg("muted", NODE_FILLED)
-				: thm.fg("accent", row.hasChildren && row.collapsed ? NODE_FILLED : NODE_OPEN);
-		const cmdMark = isBash ? "$ " : isCode ? `\`\`\`${node?.kind === "code" ? node.language : ""} ` : "";
+			: thm.fg("accent", row.hasChildren && row.collapsed ? NODE_FILLED : NODE_OPEN);
+		const cmdMark = isBash ? "$ " : "";
 		// Prefix width = graph branch + glyph(1) + space(1) + "$ "
 		const prefixW = visibleWidth(firstBranch.plain) + 2 + cmdMark.length;
 		const textW = Math.max(4, width - prefixW);
-		const paint = (s: string) => (isBash || isCode ? thm.fg("muted", s) : s);
+		const paint = (s: string) => (isBash ? thm.fg("muted", s) : s);
 		const text = this.model.textOf(row.id);
 
-		const firstPrefix = `${firstBranch.styled}${glyph} ${isBash || isCode ? thm.fg("muted", cmdMark) : ""}`;
+		const firstPrefix = `${firstBranch.styled}${glyph} ${isBash ? thm.fg("muted", cmdMark) : ""}`;
 		const chunks = wrapText(text, textW);
 		// Wrapped continuation lines only keep a connector in the node-glyph column
 		// when the node actually has children. For leaf nodes, showing a lone vertical
