@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 export type NodeId = string;
 
 /** Discriminates the node union. */
-export type NodeKind = "node" | "bash";
+export type NodeKind = "node" | "bash" | "code";
 
 /** A plain content node. Holds an unbounded number of child nodes. */
 export interface Node {
@@ -27,6 +27,14 @@ export interface Node {
 }
 
 /** A content node backed by a bash command and its captured result. */
+export interface CodeNode {
+	readonly id: NodeId;
+	readonly kind: "code";
+	language: string;
+	text: string;
+	children: NodeId[];
+}
+
 export interface BashNode {
 	/** Stable unique identity (UUID v4). */
 	readonly id: NodeId;
@@ -38,7 +46,7 @@ export interface BashNode {
 }
 
 /** Any node in the tree. */
-export type AnyNode = Node | BashNode;
+export type AnyNode = Node | BashNode | CodeNode;
 
 /** Flat id→node store; children are resolved through it by UUID. */
 export type NodeStore = Map<NodeId, AnyNode>;
@@ -91,10 +99,22 @@ export class OutlineModel {
 		let parsedAny = false;
 		let lastBash: { node: BashNode; depth: number } | undefined;
 		let bashOutput: { node: BashNode; indent: number } | undefined;
+		let codeBlock: { node: CodeNode; indent: number } | undefined;
 
 		for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
+			if (codeBlock) {
+				if (line.trim() === "```") {
+					codeBlock = undefined;
+					continue;
+				}
+				const pad = " ".repeat(codeBlock.indent);
+				const codeLine = line.startsWith(pad) ? line.slice(pad.length) : line;
+				codeBlock.node.text = codeBlock.node.text.length === 0 ? codeLine : `${codeBlock.node.text}\n${codeLine}`;
+				continue;
+			}
+
 			if (bashOutput) {
-				if (line.trim() === "</bash-output>") {
+				if (line.trim() === "</bash-output>" || line.trim() === "```") {
 					bashOutput = undefined;
 					continue;
 				}
@@ -104,7 +124,7 @@ export class OutlineModel {
 				continue;
 			}
 
-			if (lastBash && line.trim().startsWith("<bash-output")) {
+			if (lastBash && (line.trim().startsWith("<bash-output") || line.trim() === "```stdout")) {
 				bashOutput = { node: lastBash.node, indent: line.match(/^\s*/)?.[0].length ?? 0 };
 				lastBash.node.output = undefined;
 				continue;
@@ -133,9 +153,12 @@ export class OutlineModel {
 			const depth = Math.floor(match[1]!.length / 2) + bulletCount - 1;
 			const raw = match[3] ?? "";
 			const bashMatch = raw.match(/^`\$\s(.*)`$/);
+			const codeMatch = raw.match(/^```([A-Za-z0-9_+-]*)$/);
 			const node = bashMatch
 				? ({ id: randomUUID(), kind: "bash", command: bashMatch[1] ?? "", children: [] } satisfies BashNode)
-				: createNode(raw);
+				: codeMatch
+					? ({ id: randomUUID(), kind: "code", language: codeMatch[1] || "text", text: "", children: [] } satisfies CodeNode)
+					: createNode(raw);
 			store.set(node.id, node);
 
 			stack.length = depth;
@@ -144,6 +167,7 @@ export class OutlineModel {
 			else roots.push(node.id);
 			stack[depth] = node.id;
 			lastBash = node.kind === "bash" ? { node, depth } : undefined;
+			if (node.kind === "code") codeBlock = { node, indent: (depth + 1) * 2 };
 		}
 
 		if (!parsedAny) {
@@ -160,7 +184,9 @@ export class OutlineModel {
 				id,
 				node.kind === "node"
 					? { id: node.id, kind: "node", text: node.text, children: [...node.children] }
-					: {
+					: node.kind === "code"
+						? { id: node.id, kind: "code", language: node.language, text: node.text, children: [...node.children] }
+						: {
 							id: node.id,
 							kind: "bash",
 							command: node.command,
@@ -182,7 +208,9 @@ export class OutlineModel {
 				id,
 				node.kind === "node"
 					? { id: node.id, kind: "node", text: node.text, children: [...node.children] }
-					: {
+					: node.kind === "code"
+						? { id: node.id, kind: "code", language: node.language, text: node.text, children: [...node.children] }
+						: {
 							id: node.id,
 							kind: "bash",
 							command: node.command,
@@ -229,14 +257,14 @@ export class OutlineModel {
 	textOf(id: NodeId): string {
 		const node = this.store.get(id);
 		if (!node) return "";
-		if (node.kind === "node") return node.text;
+		if (node.kind === "node" || node.kind === "code") return node.text;
 		return node.command;
 	}
 
 	private setNodeText(id: NodeId, text: string): void {
 		const node = this.store.get(id);
 		if (!node) return;
-		if (node.kind === "node") node.text = text;
+		if (node.kind === "node" || node.kind === "code") node.text = text;
 		else if (node.kind === "bash") node.command = text;
 	}
 
@@ -547,6 +575,21 @@ export class OutlineModel {
 		this.store.set(bash.id, bash); // same id → all references stay valid
 	}
 
+	/** Convert the cursor node into a code block node, keeping id/children. */
+	convertCursorToCode(language = "text"): void {
+		const node = this.store.get(this.cursor.id);
+		if (!node || node.kind !== "node") return;
+		this.store.set(node.id, { id: node.id, kind: "code", language, text: node.text, children: node.children });
+	}
+
+	cycleCursorCodeLanguage(): void {
+		const node = this.store.get(this.cursor.id);
+		if (!node || node.kind !== "code") return;
+		const langs = ["text", "ts", "js", "python", "bash", "json", "md"];
+		const i = langs.indexOf(node.language);
+		node.language = langs[(i + 1) % langs.length]!;
+	}
+
 	/** Convert the cursor bash node back into a plain outline node, keeping id/children. */
 	convertCursorToNode(): void {
 		const node = this.store.get(this.cursor.id);
@@ -580,10 +623,14 @@ export class OutlineModel {
 				out.push(`${indent}- \`$ ${node.command}\``);
 				const body = (node.output ?? "").replace(/\n+$/, "");
 				if (body) {
-					out.push(`${indent}  <bash-output exit-code="${node.exitCode ?? 0}">`);
+					out.push(`${indent}  \`\`\`stdout`);
 					for (const l of body.split("\n")) out.push(`${indent}  ${l}`);
-					out.push(`${indent}  </bash-output>`);
+					out.push(`${indent}  \`\`\``);
 				}
+			} else if (node.kind === "code") {
+				out.push(`${indent}- \`\`\`${node.language}`);
+				for (const l of node.text.split("\n")) out.push(`${indent}  ${l}`);
+				out.push(`${indent}  \`\`\``);
 			} else {
 				out.push(`${indent}- ${this.textOf(id)}`);
 			}

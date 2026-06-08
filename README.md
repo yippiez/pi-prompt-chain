@@ -11,8 +11,10 @@ Build a tree, drop in bash nodes, multi-select rows to compose one markdown prom
 - `^d` — delete the current node (and its subtree)
 - `^␣` — fold / unfold a node with children
 - `!` — turn the current node into a bash node
-- `^r` — run the bash node inline (stdout renders in a box beneath it)
-- `^s` — compose the selected nodes into markdown and send
+- `^s` — run the bash node inline (stdout renders in a box beneath it)
+- `^r` — compose the selected nodes into markdown and send
+- `` ` `` — turn the current node into a code block
+- `^l` — cycle code block language
 - `^t` — cycle thinking level
 - `^o` — pi's built-in collapse / expand tool output
 - `@` — file reference completion; referenced text files are included when sent
