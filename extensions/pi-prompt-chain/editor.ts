@@ -153,8 +153,8 @@ export class PromptChainEditor extends CustomEditor {
 		}
 		if (matchesKey(data, Key.delete)) return this.run(() => m.deleteCharAfter());
 		if (matchesKey(data, Key.ctrl("space"))) return this.run(() => m.toggleCollapse());
-		if (matchesKey(data, Key.ctrl("s"))) return void this.runBash();
-		if (matchesKey(data, Key.ctrl("r"))) return void this.sendOutline();
+		if (matchesKey(data, Key.ctrl("r"))) return void this.runBash();
+		if (matchesKey(data, Key.ctrl("s"))) return void this.sendOutline();
 		if (matchesKey(data, Key.ctrl("t"))) return this.cycleThinkingLevel();
 		if (matchesKey(data, Key.ctrl("f"))) return void this.completeBashPath();
 		if (matchesKey(data, "pageDown")) return this.run(() => this.scrollBox(1));
