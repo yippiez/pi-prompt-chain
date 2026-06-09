@@ -1,9 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-/* ── prompt panel (half-height, dark gray background) ──── */
+/* ── prompt panel (40%-height, dark gray background) ────── */
 
-export const PROMPT_HEIGHT_RATIO = 0.5;
+export const PROMPT_HEIGHT_RATIO = 0.4;
 // Dark gray background (truecolor #2a2a2a). The TUI appends an SGR reset to
 // every line, so the background never bleeds into other rows.
 export const PANEL_BG = "\x1b[48;2;42;42;42m";
