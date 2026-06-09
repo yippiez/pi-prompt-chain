@@ -19,10 +19,9 @@ export const BRANCH_BLANK = "  "; // empty branch column
 export const BRANCH_TEE = "├─"; // node has following siblings
 export const BRANCH_ELBOW = "╰─"; // final sibling
 
-// Bash output is shown in a FIXED-height rounded box below the node (content
-// scrolls inside it). Fixed height keeps the display structure stable as output
-// arrives asynchronously, which the inline differential renderer requires.
-export const BOX_CONTENT_H = 6; // visible output lines inside the box
+// Bash output is shown in a rounded box below the node. Short output uses only
+// the lines it needs; longer output scrolls inside this maximum height.
+export const BOX_CONTENT_H = 6; // maximum visible output lines inside the box
 export const BOX_MAX_W = 90; // max box width in columns
 
 // Return a display-column slice of `text` starting at `startCols` and no wider

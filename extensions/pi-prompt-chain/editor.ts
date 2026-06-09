@@ -530,7 +530,7 @@ export class PromptChainEditor extends CustomEditor {
 		return { plain, styled: this.ctx.ui.theme.fg("dim", plain) };
 	}
 
-	/** Fixed-height rounded box showing a bash node's output (scrolls inside). */
+	/** Rounded box showing a bash node's output (up to BOX_CONTENT_H lines; scrolls inside when longer). */
 	private renderOutputBox(
 		id: NodeId,
 		output: string,
@@ -543,19 +543,20 @@ export class PromptChainEditor extends CustomEditor {
 		const boxW = Math.max(8, Math.min(BOX_MAX_W, width - visibleWidth(indent)));
 		const innerW = boxW - 4; // "│ " + content + " │"
 		const all = sanitizeOutput(output).replace(/\n+$/, "").split("\n");
-		const scroll = Math.min(this.boxScroll.get(id) ?? 0, Math.max(0, all.length - BOX_CONTENT_H));
+		const contentH = Math.min(BOX_CONTENT_H, Math.max(1, all.length));
+		const scroll = Math.min(this.boxScroll.get(id) ?? 0, Math.max(0, all.length - contentH));
 		const maxHScroll = Math.max(0, ...all.map((line) => visibleWidth(line) - innerW));
 		const hscroll = Math.min(this.boxHScroll.get(id) ?? 0, maxHScroll);
 
 		const lines: string[] = [];
 		const label = hscroll > 0 ? ` stdout @${hscroll} ` : " stdout ";
 		lines.push(dim(`${indent}╭${label}${"─".repeat(Math.max(0, boxW - 2 - label.length))}╮`));
-		for (let i = 0; i < BOX_CONTENT_H; i++) {
+		for (let i = 0; i < contentH; i++) {
 			let cell = truncateToWidth(sliceDisplayWidth(all[scroll + i] ?? "", hscroll, innerW + 1), innerW, "…");
 			cell += " ".repeat(Math.max(0, innerW - visibleWidth(cell)));
 			lines.push(dim(`${indent}│ ${cell} │`));
 		}
-		const more = all.length - (scroll + BOX_CONTENT_H);
+		const more = all.length - (scroll + contentH);
 		const tags = [
 			all.length > BOX_CONTENT_H ? "Pg↑↓" : "",
 			maxHScroll > 0 ? "⌥←→" : "",
@@ -702,8 +703,8 @@ export class PromptChainEditor extends CustomEditor {
 			return [topBar, ...interior, bottomBar, commandLine, ...menuLines];
 		}
 
-		// Flatten to a list of display LINES (a node may wrap to several), plus a
-		// fixed box for bash output. `cursor` marks lines of the cursor node.
+		// Flatten to a list of display LINES (a node may wrap to several), plus an
+		// output box for bash output. `cursor` marks lines of the cursor node.
 		const rows = this.model.visibleRows();
 		const cursor = this.model.cursor;
 		const display: { text: string; cursor: boolean }[] = [];
