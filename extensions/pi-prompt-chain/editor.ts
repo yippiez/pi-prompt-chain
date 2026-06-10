@@ -248,7 +248,8 @@ export class PromptChainEditor extends CustomEditor {
 		const glyph = row.hasChildren ? (row.collapsed ? NODE_FILLED : NODE_OPEN) : row.isLast ? BRANCH_ELBOW : BRANCH_TEE;
 		const node = this.model.getNode(row.id);
 		const isBash = node?.kind === "bash";
-		const isSlash = row.depth === 0 && node?.kind === "node" && this.model.textOf(row.id).startsWith("/");
+		const isFirstRow = this.model.visibleRows()[0]?.id === row.id;
+		const isSlash = isFirstRow && row.depth === 0 && node?.kind === "node" && /^\/[\w:-]/.test(this.model.textOf(row.id));
 		const prefixW = visibleWidth(`${branch}${glyph} ${isBash ? "$ " : isSlash ? "/" : ""}`);
 		return Math.max(4, W - prefixW);
 	}
@@ -388,8 +389,10 @@ export class PromptChainEditor extends CustomEditor {
 	}
 
 	private slashPrefixBeforeCursor(): string | null {
-		const row = this.model.visibleRows().find((r) => r.id === this.model.cursor.id);
-		if (!row || row.depth !== 0) return null;
+		const rows = this.model.visibleRows();
+		const rowIndex = rows.findIndex((r) => r.id === this.model.cursor.id);
+		const row = rowIndex >= 0 ? rows[rowIndex] : undefined;
+		if (!row || row.depth !== 0 || rowIndex !== 0) return null;
 		const text = this.model.textOf(this.model.cursor.id).slice(0, this.model.cursor.col);
 		const match = text.match(/(?:^|\s)(\/[\w:-]*)$/);
 		return match?.[1] ?? null;
@@ -645,7 +648,8 @@ export class PromptChainEditor extends CustomEditor {
 		const node = this.model.getNode(row.id);
 		const isBash = node?.kind === "bash";
 		const rawText = this.model.textOf(row.id);
-		const isSlash = row.depth === 0 && node?.kind === "node" && rawText.startsWith("/");
+		const isFirstRow = this.model.visibleRows()[0]?.id === row.id;
+		const isSlash = isFirstRow && row.depth === 0 && node?.kind === "node" && /^\/[\w:-]/.test(rawText);
 		const firstBranch = this.branchPrefix(row, false);
 		const contBranch = this.branchPrefix(row, true);
 		const glyph = isBash
