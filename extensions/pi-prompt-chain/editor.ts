@@ -245,6 +245,13 @@ export class PromptChainEditor extends CustomEditor {
 			this.model = OutlineModel.fromMarkdown(text);
 			return;
 		}
+		if (text.includes("\n")) {
+			const current = this.model.textOf(this.model.cursor.id);
+			const col = this.model.cursor.col;
+			const next = current.slice(0, col) + text + current.slice(col);
+			this.model.replaceCursorText(next, Math.min(next.length, col + text.length));
+			return;
+		}
 		this.model.pasteText(text);
 	}
 
@@ -484,9 +491,13 @@ export class PromptChainEditor extends CustomEditor {
 		return /^\/[\w:-]+(?:\s+.*)?$/.test(text) ? text : undefined;
 	}
 
+	private allInputNodesEmpty(): boolean {
+		return this.model.visibleRows().every((row) => this.model.textOf(row.id).trim().length === 0);
+	}
+
 	/** Compose the whole outline as markdown, send it to the agent, and clear. */
 	private async sendOutline(): Promise<void> {
-		if (this.model.isBlank()) return;
+		if (this.model.isBlank() || this.allInputNodesEmpty()) return;
 		const slashCommand = this.singleSlashCommand();
 		if (slashCommand) {
 			super.setText(slashCommand);
@@ -629,13 +640,14 @@ export class PromptChainEditor extends CustomEditor {
 		return { plain, styled: this.ctx.ui.theme.fg("dim", plain) };
 	}
 
-	/** Rounded box showing a bash node's output (up to BOX_CONTENT_H lines; scrolls inside when longer). */
-	private renderOutputBox(
+	/** Rounded box showing multiline node text or bash output (up to BOX_CONTENT_H lines; scrolls inside when longer). */
+	private renderTextBox(
 		id: NodeId,
 		output: string,
 		row: VisibleRow,
 		width: number,
 		thm: ExtensionContext["ui"]["theme"],
+		labelText: string,
 	): string[] {
 		const dim = (s: string) => thm.fg("dim", s);
 		const indent = this.branchPrefix(row, true).plain + "  "; // align under the node circle
@@ -648,7 +660,7 @@ export class PromptChainEditor extends CustomEditor {
 		const hscroll = Math.min(this.boxHScroll.get(id) ?? 0, maxHScroll);
 
 		const lines: string[] = [];
-		const label = hscroll > 0 ? ` stdout @${hscroll} ` : " stdout ";
+		const label = hscroll > 0 ? ` ${labelText} @${hscroll} ` : ` ${labelText} `;
 		lines.push(dim(`${indent}╭${label}${"─".repeat(Math.max(0, boxW - 2 - label.length))}╮`));
 		for (let i = 0; i < contentH; i++) {
 			let cell = truncateToWidth(sliceDisplayWidth(all[scroll + i] ?? "", hscroll, innerW + 1), innerW, "…");
@@ -665,6 +677,16 @@ export class PromptChainEditor extends CustomEditor {
 		const tag = tags.length > 0 ? ` ${tags.join(" ")} ` : "";
 		lines.push(dim(`${indent}╰${"─".repeat(Math.max(0, boxW - 2 - visibleWidth(tag)))}${tag}╯`));
 		return lines;
+	}
+
+	private renderOutputBox(
+		id: NodeId,
+		output: string,
+		row: VisibleRow,
+		width: number,
+		thm: ExtensionContext["ui"]["theme"],
+	): string[] {
+		return this.renderTextBox(id, output, row, width, thm, "stdout");
 	}
 
 	/* ---- rendering ---- */
@@ -695,7 +717,8 @@ export class PromptChainEditor extends CustomEditor {
 		const prefixW = visibleWidth(firstBranch.plain) + 2 + cmdMark.length;
 		const textW = Math.max(4, width - prefixW);
 		const paint = (s: string) => (isBash ? thm.fg("muted", s) : isSlash ? thm.fg("accent", s) : s);
-		const text = isSlash ? rawText.slice(1) : rawText;
+		const displayRawText = rawText.includes("\n") ? rawText.split("\n", 1)[0]! : rawText;
+		const text = isSlash ? displayRawText.slice(1) : displayRawText;
 		const displayCaretCol = isSlash && caretCol >= 0 ? Math.max(0, caretCol - 1) : caretCol;
 
 		const firstPrefix = `${firstBranch.styled}${glyph} ${cmdMark ? thm.fg("muted", cmdMark) : ""}`;
@@ -804,6 +827,10 @@ export class PromptChainEditor extends CustomEditor {
 			const node = this.model.getNode(row.id);
 			if (node?.kind === "bash" && node.output !== undefined && !row.collapsed) {
 				for (const text of this.renderOutputBox(row.id, node.output, row, W, thm)) {
+					display.push({ text, cursor: false });
+				}
+			} else if (node?.kind === "node" && this.model.textOf(row.id).includes("\n") && !row.collapsed) {
+				for (const text of this.renderTextBox(row.id, this.model.textOf(row.id), row, W, thm, "pasted")) {
 					display.push({ text, cursor: false });
 				}
 			}
