@@ -246,8 +246,10 @@ export class PromptChainEditor extends CustomEditor {
 		if (!row) return W;
 		const branch = row.ancestorContinues.map((cont) => (cont ? BRANCH : BRANCH_BLANK)).join("");
 		const glyph = row.hasChildren ? (row.collapsed ? NODE_FILLED : NODE_OPEN) : row.isLast ? BRANCH_ELBOW : BRANCH_TEE;
-		const isBash = this.model.getNode(row.id)?.kind === "bash";
-		const prefixW = visibleWidth(`${branch}${glyph} ${isBash ? "$ " : ""}`);
+		const node = this.model.getNode(row.id);
+		const isBash = node?.kind === "bash";
+		const isSlash = node?.kind === "node" && this.model.textOf(row.id).startsWith("/");
+		const prefixW = visibleWidth(`${branch}${glyph} ${isBash ? "$ " : isSlash ? "/" : ""}`);
 		return Math.max(4, W - prefixW);
 	}
 
@@ -435,16 +437,39 @@ export class PromptChainEditor extends CustomEditor {
 		this.activeTui.requestRender();
 	}
 
+	private singleSlashCommand(): string | undefined {
+		const rows = this.model.visibleRows();
+		if (rows.length !== 1) return undefined;
+		const row = rows[0]!;
+		if (row.hasChildren) return undefined;
+		const node = this.model.getNode(row.id);
+		if (node?.kind !== "node") return undefined;
+		const text = this.model.textOf(row.id).trim();
+		return /^\/[\w:-]+(?:\s+.*)?$/.test(text) ? text : undefined;
+	}
+
 	/** Compose the whole outline as markdown, send it to the agent, and clear. */
 	private async sendOutline(): Promise<void> {
 		if (this.model.isBlank()) return;
+		const slashCommand = this.singleSlashCommand();
+		if (slashCommand) {
+			super.setText(slashCommand);
+			super.handleInput(Key.enter);
+			this.model = new OutlineModel(new Map(), [], new Set());
+			this.activeTui.requestRender();
+			return;
+		}
 		const md = this.model.composeMarkdown();
 		if (!md.trim()) return;
 		const prompt = await this.expandFileReferences(md);
 		this.outlineHistory.push(this.model.snapshot());
 		this.stopHistoryBrowse();
-		// isIdle() lives on the ExtensionContext, not the ExtensionAPI.
-		this.pi.sendUserMessage(prompt, this.ctx.isIdle() ? undefined : { deliverAs: "steer" });
+		// Send as a rendered custom message so the transcript matches the outline
+		// editor, while the LLM still receives the underlying markdown prompt.
+		this.pi.sendMessage(
+			{ customType: "pi-prompt-chain-user", content: prompt, display: true, details: { markdown: md } },
+			this.ctx.isIdle() ? { triggerTurn: true } : { triggerTurn: true, deliverAs: "followUp" },
+		);
 		// Clear the outline — reset to a single empty root node.
 		this.model = new OutlineModel(new Map(), [], new Set());
 		this.activeTui.requestRender();
@@ -617,19 +642,24 @@ export class PromptChainEditor extends CustomEditor {
 	): { lines: string[]; caretLine: number } {
 		const node = this.model.getNode(row.id);
 		const isBash = node?.kind === "bash";
+		const rawText = this.model.textOf(row.id);
+		const isSlash = node?.kind === "node" && rawText.startsWith("/");
 		const firstBranch = this.branchPrefix(row, false);
 		const contBranch = this.branchPrefix(row, true);
 		const glyph = isBash
 			? thm.fg("error", NODE_FILLED) // red circle for bash nodes
-			: thm.fg("accent", row.hasChildren && row.collapsed ? NODE_FILLED : NODE_OPEN);
-		const cmdMark = isBash ? "$ " : "";
-		// Prefix width = graph branch + glyph(1) + space(1) + "$ "
+			: isSlash
+				? thm.fg("accent", NODE_FILLED) // blue filled circle for slash-command nodes
+				: thm.fg("accent", row.hasChildren && row.collapsed ? NODE_FILLED : NODE_OPEN);
+		const cmdMark = isBash ? "$ " : isSlash ? "/" : "";
+		// Prefix width = graph branch + glyph(1) + space(1) + command marker.
 		const prefixW = visibleWidth(firstBranch.plain) + 2 + cmdMark.length;
 		const textW = Math.max(4, width - prefixW);
-		const paint = (s: string) => (isBash ? thm.fg("muted", s) : s);
-		const text = this.model.textOf(row.id);
+		const paint = (s: string) => (isBash ? thm.fg("muted", s) : isSlash ? thm.fg("accent", s) : s);
+		const text = isSlash ? rawText.slice(1) : rawText;
+		const displayCaretCol = isSlash && caretCol >= 0 ? Math.max(0, caretCol - 1) : caretCol;
 
-		const firstPrefix = `${firstBranch.styled}${glyph} ${isBash ? thm.fg("muted", cmdMark) : ""}`;
+		const firstPrefix = `${firstBranch.styled}${glyph} ${cmdMark ? thm.fg("muted", cmdMark) : ""}`;
 		const chunks = wrapText(text, textW);
 		// Wrapped continuation lines only keep a connector in the node-glyph column
 		// when the node actually has children. For leaf nodes, showing a lone vertical
@@ -643,12 +673,12 @@ export class PromptChainEditor extends CustomEditor {
 			const end = start + str.length;
 			let body: string;
 			const onCaret =
-				caretCol >= 0 &&
-				caretCol >= start &&
-				(caretCol < end || (li === chunks.length - 1 && caretCol === end));
+				displayCaretCol >= 0 &&
+				displayCaretCol >= start &&
+				(displayCaretCol < end || (li === chunks.length - 1 && displayCaretCol === end));
 			if (onCaret) {
 				caretLine = li;
-				const rel = caretCol - start;
+				const rel = displayCaretCol - start;
 				const at = rel < str.length ? str[rel]! : " ";
 				body = `${paint(str.slice(0, rel))}\x1b[7m${at}\x1b[27m${paint(str.slice(rel + 1))}`;
 			} else {

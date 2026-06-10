@@ -1,11 +1,14 @@
 import type { ExtensionAPI, KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { PromptChainEditor } from "./editor.ts";
+import { registerPromptChainMessageRenderer } from "./message-renderer.ts";
 import { shortcutsText } from "./render.ts";
 
 /* ── extension entry ────────────────────────────────── */
 
 export default function (pi: ExtensionAPI) {
+	registerPromptChainMessageRenderer(pi);
+
 	// Native conversation (thinking · tools · output) renders inline in the
 	// scrollback ABOVE the editor box — nothing custom is pinned above the prompt bar.
 	let activeEditor: PromptChainEditor | undefined;
