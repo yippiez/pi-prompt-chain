@@ -99,8 +99,17 @@ export class PromptChainEditor extends CustomEditor {
 			this.completion = undefined;
 		}
 
-		if (matchesKey(data, "shift+enter")) return this.run(() => m.enter());
-		if (matchesKey(data, Key.enter)) return void this.sendOutline();
+		if (this.isNewlineKey(data)) return this.run(() => m.enter());
+		if (matchesKey(data, Key.enter)) {
+			const text = m.textOf(m.cursor.id);
+			if (m.cursor.col > 0 && text[m.cursor.col - 1] === "\\") {
+				return this.run(() => {
+					m.deleteCharBefore();
+					m.enter();
+				});
+			}
+			return void this.sendOutline();
+		}
 		if (matchesKey(data, "ctrl+backspace")) return this.run(() => m.deleteCurrentNode());
 		if (matchesKey(data, "tab")) return this.run(() => m.indent());
 		if (matchesKey(data, "shift+tab")) return this.run(() => m.outdent());
@@ -237,6 +246,17 @@ export class PromptChainEditor extends CustomEditor {
 			return;
 		}
 		this.model.pasteText(text);
+	}
+
+	private isNewlineKey(data: string): boolean {
+		return (
+			matchesKey(data, "shift+enter") ||
+			data === "\x1b\r" ||
+			data === "\x1b[13;2~" ||
+			data === "\x1b[13;2u" ||
+			(data.length > 1 && data.includes("\x1b") && data.includes("\r")) ||
+			(data === "\n" && data.length === 1)
+		);
 	}
 
 	private run(op: () => void, clearHistoryBrowse = true): void {
