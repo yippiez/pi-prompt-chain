@@ -28,6 +28,7 @@ export class PromptChainEditor extends CustomEditor {
 	private outlineHistory: OutlineSnapshot[] = [];
 	private historyIndex: number | undefined;
 	private historyDraft: OutlineSnapshot | undefined;
+	private queuedPromptDrafts: string[] = [];
 
 	constructor(
 		tui: TUI,
@@ -64,6 +65,7 @@ export class PromptChainEditor extends CustomEditor {
 		// editor.setText(). In outline mode, convert that restored text into outline
 		// nodes instead of leaving it in CustomEditor's hidden text buffer.
 		if (text.length > 0) {
+			this.queuedPromptDrafts.pop();
 			this.model = OutlineModel.fromMarkdown(text);
 			this.stopHistoryBrowse();
 			super.setText("");
@@ -107,6 +109,15 @@ export class PromptChainEditor extends CustomEditor {
 		// Browse sent-outline history only with Alt+Up/Down, not plain arrows, so
 		// normal navigation at the first/last node cannot accidentally replace the draft.
 		if (matchesKey(data, "alt+up")) {
+			if (this.queuedPromptDrafts.length > 0 || this.ctx.hasPendingMessages()) {
+				const draft = this.queuedPromptDrafts.pop();
+				super.handleInput(data);
+				const restored = this.getText();
+				if (restored.length > 0) this.setText(restored);
+				else if (draft) this.model = OutlineModel.fromMarkdown(draft);
+				this.activeTui.requestRender();
+				return;
+			}
 			this.navigateOutlineHistory(-1);
 			return;
 		}
@@ -471,10 +482,12 @@ export class PromptChainEditor extends CustomEditor {
 		this.stopHistoryBrowse();
 		// Send as a rendered custom message so the transcript matches the outline
 		// editor, while the LLM still receives the underlying markdown prompt.
-		this.pi.sendMessage(
-			{ customType: "pi-prompt-chain-user", content: prompt, display: true, details: { markdown: md } },
-			this.ctx.isIdle() ? { triggerTurn: true } : { triggerTurn: true, deliverAs: "followUp" },
-		);
+		if (this.ctx.isIdle()) {
+			this.pi.sendMessage({ customType: "pi-prompt-chain-user", content: prompt, display: true, details: { markdown: md } }, { triggerTurn: true });
+		} else {
+			this.queuedPromptDrafts.push(md);
+			this.pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+		}
 		// Clear the outline — reset to a single empty root node.
 		this.model = new OutlineModel(new Map(), [], new Set());
 		this.activeTui.requestRender();
@@ -729,7 +742,8 @@ export class PromptChainEditor extends CustomEditor {
 			? (text: string) => thm.fg("error", text)
 			: (text: string) => thm.fg("dim", text);
 
-		const sessionName = this.pi.getSessionName() ?? "untitled";
+		const queued = this.queuedPromptDrafts.length > 0 ? ` · ${this.queuedPromptDrafts.length} queued` : "";
+		const sessionName = `${this.pi.getSessionName() ?? "untitled"}${queued}`;
 		const model = this.ctx.model
 			? `${this.ctx.model.provider}/${this.ctx.model.id} · ${this.pi.getThinkingLevel()}`
 			: `no model · ${this.pi.getThinkingLevel()}`;
