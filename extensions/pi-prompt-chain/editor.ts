@@ -16,12 +16,11 @@ export class PromptChainEditor extends CustomEditor {
 	private refreshTimer: ReturnType<typeof setInterval> | undefined;
 	private model: OutlineModel;
 	private scrollTop = 0;
-	private commandMode = false; // delegating to the base editor for a /slash command
 	private boxScroll = new Map<NodeId, number>(); // per bash node: vertical output box scroll offset
 	private boxHScroll = new Map<NodeId, number>(); // per bash node: horizontal output box scroll offset
 	private autocompleteProvider: AutocompleteProvider | undefined;
 	private completion:
-		| { id: NodeId; prefix: string; items: AutocompleteItem[]; selected: number; source: "at" | "bash" }
+		| { id: NodeId; prefix: string; items: AutocompleteItem[]; selected: number; source: "at" | "slash" | "bash" }
 		| undefined;
 	private completionRequestId = 0;
 	private isInPaste = false;
@@ -64,7 +63,7 @@ export class PromptChainEditor extends CustomEditor {
 		// App-level actions such as Alt+Up restore queued messages by calling
 		// editor.setText(). In outline mode, convert that restored text into outline
 		// nodes instead of leaving it in CustomEditor's hidden text buffer.
-		if (!this.commandMode && text.length > 0 && !text.startsWith("/")) {
+		if (text.length > 0) {
 			this.model = OutlineModel.fromMarkdown(text);
 			this.stopHistoryBrowse();
 			super.setText("");
@@ -90,32 +89,7 @@ export class PromptChainEditor extends CustomEditor {
 		// The base CustomEditor has its own hidden text buffer. Keep it empty while
 		// we are in outline mode so app-level actions cannot leave stale text that
 		// later breaks slash-command mode.
-		if (!this.commandMode && this.getText().length > 0) this.setText("");
-
-		// While composing a /slash command, hand all input to the base editor
-		// (which owns the command menu + execution). Escape cancels back to the
-		// outline; we also exit once the buffer no longer holds a "/command".
-		if (this.commandMode) {
-			if (matchesKey(data, "escape")) {
-				this.setText("");
-				this.commandMode = false;
-				this.activeTui.requestRender();
-				return;
-			}
-			super.handleInput(data);
-			const text = this.getText();
-			if (text.length === 0 || !text.startsWith("/")) this.commandMode = false;
-			this.activeTui.requestRender();
-			return;
-		}
-		// "/" on an empty node enters command mode and delegates to the base editor.
-		if (data === "/" && m.cursor.col === 0 && m.getNode(m.cursor.id)?.kind === "node" && m.textOf(m.cursor.id).length === 0) {
-			this.setText("");
-			this.commandMode = true;
-			super.handleInput("/");
-			this.activeTui.requestRender();
-			return;
-		}
+		if (this.getText().length > 0) this.setText("");
 
 		if (this.handleOutlinePasteInput(data)) return;
 
@@ -140,15 +114,17 @@ export class PromptChainEditor extends CustomEditor {
 			this.navigateOutlineHistory(1);
 			return;
 		}
-		if (matchesKey(data, Key.up)) return this.run(() => m.moveCaretUp(), false);
-		if (matchesKey(data, Key.down)) return this.run(() => m.moveCaretDown(), false);
+		if (matchesKey(data, "ctrl+left")) return this.run(() => this.moveWordLeft());
+		if (matchesKey(data, "ctrl+right")) return this.run(() => this.moveWordRight());
+		if (matchesKey(data, Key.up)) return this.run(() => this.moveCaretVisual(-1), false);
+		if (matchesKey(data, Key.down)) return this.run(() => this.moveCaretVisual(1), false);
 		if (matchesKey(data, Key.left)) return this.run(() => m.moveCaretLeft());
 		if (matchesKey(data, Key.right)) return this.run(() => m.moveCaretRight());
 		if (matchesKey(data, Key.home)) return this.run(() => m.caretHome());
 		if (matchesKey(data, Key.end)) return this.run(() => m.caretEnd());
 		if (matchesKey(data, "backspace")) {
 			this.run(() => (m.cursor.col > 0 ? m.deleteCharBefore() : m.backspaceMerge()));
-			void this.maybeOpenAtCompletion();
+			void this.maybeOpenInlineCompletion();
 			return;
 		}
 		if (matchesKey(data, Key.delete)) return this.run(() => m.deleteCharAfter());
@@ -174,7 +150,7 @@ export class PromptChainEditor extends CustomEditor {
 		// Printable char.
 		if (data.length === 1 && data.charCodeAt(0) >= 32) {
 			this.run(() => m.insertChar(data));
-			void this.maybeOpenAtCompletion();
+			void this.maybeOpenInlineCompletion();
 			return;
 		}
 
@@ -262,6 +238,51 @@ export class PromptChainEditor extends CustomEditor {
 	private stopHistoryBrowse(): void {
 		this.historyIndex = undefined;
 		this.historyDraft = undefined;
+	}
+
+	private currentTextWidth(): number {
+		const W = Math.max(1, this.activeTui.terminal.columns - 1);
+		const row = this.model.visibleRows().find((r) => r.id === this.model.cursor.id);
+		if (!row) return W;
+		const branch = row.ancestorContinues.map((cont) => (cont ? BRANCH : BRANCH_BLANK)).join("");
+		const glyph = row.hasChildren ? (row.collapsed ? NODE_FILLED : NODE_OPEN) : row.isLast ? BRANCH_ELBOW : BRANCH_TEE;
+		const isBash = this.model.getNode(row.id)?.kind === "bash";
+		const prefixW = visibleWidth(`${branch}${glyph} ${isBash ? "$ " : ""}`);
+		return Math.max(4, W - prefixW);
+	}
+
+	private moveCaretVisual(delta: -1 | 1): void {
+		const id = this.model.cursor.id;
+		const text = this.model.textOf(id);
+		const chunks = wrapText(text, this.currentTextWidth());
+		const col = this.model.cursor.col;
+		const found = chunks.findIndex((chunk, i) => col >= chunk.start && col <= (chunks[i + 1]?.start ?? text.length));
+		const idx = Math.max(0, found);
+		const current = chunks[idx] ?? { start: 0, str: "" };
+		const target = chunks[idx + delta];
+		if (!target) {
+			delta < 0 ? this.model.moveCaretUp() : this.model.moveCaretDown();
+			return;
+		}
+		const x = Math.max(0, col - current.start);
+		const targetEnd = chunks[idx + delta + 1]?.start ?? text.length;
+		this.model.cursor.col = Math.min(target.start + x, targetEnd);
+	}
+
+	private moveWordLeft(): void {
+		const text = this.model.textOf(this.model.cursor.id);
+		let i = this.model.cursor.col;
+		while (i > 0 && /\s/.test(text[i - 1]!)) i--;
+		while (i > 0 && !/\s/.test(text[i - 1]!)) i--;
+		this.model.cursor.col = i;
+	}
+
+	private moveWordRight(): void {
+		const text = this.model.textOf(this.model.cursor.id);
+		let i = this.model.cursor.col;
+		while (i < text.length && /\s/.test(text[i]!)) i++;
+		while (i < text.length && !/\s/.test(text[i]!)) i++;
+		this.model.cursor.col = i;
 	}
 
 	private navigateOutlineHistory(dir: -1 | 1): boolean {
@@ -358,12 +379,20 @@ export class PromptChainEditor extends CustomEditor {
 		return unquoted?.[1] ?? null;
 	}
 
-	/** Open/update @file completions for outline text using pi's built-in provider. */
-	private async maybeOpenAtCompletion(): Promise<void> {
+	private slashPrefixBeforeCursor(): string | null {
+		const text = this.model.textOf(this.model.cursor.id).slice(0, this.model.cursor.col);
+		const match = text.match(/(?:^|\s)(\/[\w:-]*)$/);
+		return match?.[1] ?? null;
+	}
+
+	/** Open/update @file or /command completions inside the current outline node. */
+	private async maybeOpenInlineCompletion(): Promise<void> {
 		if (!this.autocompleteProvider) return;
-		const prefix = this.atPrefixBeforeCursor();
-		if (!prefix) {
-			if (this.completion?.source === "at") {
+		const atPrefix = this.atPrefixBeforeCursor();
+		const slashPrefix = this.slashPrefixBeforeCursor();
+		const source = atPrefix ? "at" : slashPrefix ? "slash" : undefined;
+		if (!source) {
+			if (this.completion?.source === "at" || this.completion?.source === "slash") {
 				this.completion = undefined;
 				this.activeTui.requestRender();
 			}
@@ -382,7 +411,7 @@ export class PromptChainEditor extends CustomEditor {
 		if (!suggestions || suggestions.items.length === 0) {
 			this.completion = undefined;
 		} else {
-			this.completion = { id, prefix: suggestions.prefix, items: suggestions.items, selected: 0, source: "at" };
+			this.completion = { id, prefix: suggestions.prefix, items: suggestions.items, selected: 0, source };
 		}
 		this.activeTui.requestRender();
 	}
@@ -402,6 +431,7 @@ export class PromptChainEditor extends CustomEditor {
 
 	/** Compose the whole outline as markdown, send it to the agent, and clear. */
 	private async sendOutline(): Promise<void> {
+		if (this.model.isBlank()) return;
 		const md = this.model.composeMarkdown();
 		if (!md.trim()) return;
 		const prompt = await this.expandFileReferences(md);
@@ -680,29 +710,6 @@ export class PromptChainEditor extends CustomEditor {
 		const boxHeight = Math.max(4, Math.floor(termHeight * PROMPT_HEIGHT_RATIO));
 		const outlineHeight = boxHeight - 2; // minus the two bar rows (hints are in the footer)
 
-		// Command mode: move the typed /command OUTSIDE the prompt box, directly
-		// below the bottom bar, with the slash-command menu under it. Total height
-		// stays == boxHeight by stealing interior rows for the command/menu lines.
-		if (this.commandMode) {
-			const base = super.render(W); // [topBorder, ...input, bottomBorder, ...menu]
-			const ed = this as unknown as {
-				autocompleteState?: unknown;
-				autocompleteList?: { render(w: number): string[] };
-			};
-			const rawMenu = ed.autocompleteState && ed.autocompleteList ? ed.autocompleteList.render(W) : [];
-			const menuH = Math.min(rawMenu.length, Math.max(0, outlineHeight - 1));
-			const menu = rawMenu.slice(0, menuH);
-			// Strip the borders + menu from `base`, leaving just the input line(s).
-			const inputLines = base.slice(1, Math.max(1, base.length - rawMenu.length - 1));
-			const commandLine = truncateToWidth(inputLines[0] ?? "", W, "");
-			const interiorH = Math.max(0, outlineHeight - 1 - menuH);
-			const interior: string[] = [];
-			for (let k = 0; k < interiorH; k++) interior.push(bgFillLine("", W, PANEL_BG));
-			// Transparent command/menu: no background fill, just styled text.
-			const menuLines = menu.map((l) => truncateToWidth(l, W, ""));
-			return [topBar, ...interior, bottomBar, commandLine, ...menuLines];
-		}
-
 		// Flatten to a list of display LINES (a node may wrap to several), plus an
 		// output box for bash output. `cursor` marks lines of the cursor node.
 		const rows = this.model.visibleRows();
@@ -715,8 +722,8 @@ export class PromptChainEditor extends CustomEditor {
 			const nodeStart = display.length;
 			const rendered = this.renderNodeLines(row, isCur ? cursor.col : -1, W, thm);
 			if (isCur) cursorDisp = nodeStart + rendered.caretLine;
-			for (const text of rendered.lines) {
-				display.push({ text, cursor: isCur });
+			for (let i = 0; i < rendered.lines.length; i++) {
+				display.push({ text: rendered.lines[i]!, cursor: isCur && i === rendered.caretLine });
 			}
 			const node = this.model.getNode(row.id);
 			if (node?.kind === "bash" && node.output !== undefined && !row.collapsed) {
