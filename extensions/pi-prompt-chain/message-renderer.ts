@@ -50,6 +50,10 @@ function renderOutline(markdown: string, width: number, theme: any): string[] {
 			for (const raw of node.output.split("\n").slice(0, 5)) {
 				lines.push(promptBg(theme.fg("dim", truncateToWidth(` ${BRANCH_BLANK}  ${raw}`, width, "…")), width));
 			}
+		} else if (node?.kind === "node" && node.pasted) {
+			for (const raw of node.pasted.split("\n").slice(0, 5)) {
+				lines.push(promptBg(theme.fg("dim", truncateToWidth(` ${BRANCH_BLANK}  ${raw}`, width, "…")), width));
+			}
 		}
 	}
 	lines.push(fitBorder("", "", width, (s) => theme.fg("dim", s)));

@@ -22,6 +22,8 @@ export interface Node {
 	readonly id: NodeId;
 	readonly kind: "node";
 	text: string;
+	/** Multiline pasted note attached to this node without changing its editable title. */
+	pasted?: string;
 	/** Child node ids — infinite nesting; resolved through the NodeStore. */
 	children: NodeId[];
 }
@@ -90,9 +92,22 @@ export class OutlineModel {
 		const stack: NodeId[] = [];
 		let parsedAny = false;
 		let lastBash: { node: BashNode; depth: number } | undefined;
+		let lastNode: { node: Node; depth: number } | undefined;
 		let bashOutput: { node: BashNode; indent: number } | undefined;
+		let pastedOutput: { node: Node; indent: number } | undefined;
 
 		for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
+			if (pastedOutput) {
+				if (line.trim() === "</pasted>") {
+					pastedOutput = undefined;
+					continue;
+				}
+				const pad = " ".repeat(pastedOutput.indent);
+				const outLine = line.startsWith(pad) ? line.slice(pad.length) : line;
+				pastedOutput.node.pasted = pastedOutput.node.pasted === undefined ? outLine : `${pastedOutput.node.pasted}\n${outLine}`;
+				continue;
+			}
+
 			if (bashOutput) {
 				if (line.trim() === "</bash-output>") {
 					bashOutput = undefined;
@@ -101,6 +116,12 @@ export class OutlineModel {
 				const pad = " ".repeat(bashOutput.indent);
 				const outLine = line.startsWith(pad) ? line.slice(pad.length) : line;
 				bashOutput.node.output = bashOutput.node.output === undefined ? outLine : `${bashOutput.node.output}\n${outLine}`;
+				continue;
+			}
+
+			if (lastNode && line.trim().startsWith("<pasted")) {
+				pastedOutput = { node: lastNode.node, indent: line.match(/^\s*/)?.[0].length ?? 0 };
+				lastNode.node.pasted = undefined;
 				continue;
 			}
 
@@ -144,6 +165,7 @@ export class OutlineModel {
 			else roots.push(node.id);
 			stack[depth] = node.id;
 			lastBash = node.kind === "bash" ? { node, depth } : undefined;
+			lastNode = node.kind === "node" ? { node, depth } : undefined;
 		}
 
 		if (!parsedAny) {
@@ -159,7 +181,7 @@ export class OutlineModel {
 			snapshot.store.map(([id, node]) => [
 				id,
 				node.kind === "node"
-					? { id: node.id, kind: "node", text: node.text, children: [...node.children] }
+					? { id: node.id, kind: "node", text: node.text, pasted: node.pasted, children: [...node.children] }
 					: {
 							id: node.id,
 							kind: "bash",
@@ -181,7 +203,7 @@ export class OutlineModel {
 			store: [...this.store.entries()].map(([id, node]) => [
 				id,
 				node.kind === "node"
-					? { id: node.id, kind: "node", text: node.text, children: [...node.children] }
+					? { id: node.id, kind: "node", text: node.text, pasted: node.pasted, children: [...node.children] }
 					: {
 							id: node.id,
 							kind: "bash",
@@ -243,6 +265,12 @@ export class OutlineModel {
 	replaceCursorText(text: string, col = text.length): void {
 		this.setNodeText(this.cursor.id, text);
 		this.cursor.col = Math.max(0, Math.min(col, text.length));
+	}
+
+	appendPastedToCursor(text: string): void {
+		const node = this.store.get(this.cursor.id);
+		if (!node || node.kind !== "node") return;
+		node.pasted = node.pasted ? `${node.pasted}\n${text}` : text;
 	}
 
 	childrenOf(id: NodeId): NodeId[] {
@@ -586,6 +614,11 @@ export class OutlineModel {
 				}
 			} else {
 				out.push(`${indent}- ${this.textOf(id)}`);
+				if (node.pasted) {
+					out.push(`${indent}  <pasted>`);
+					for (const l of node.pasted.replace(/\n+$/, "").split("\n")) out.push(`${indent}  ${l}`);
+					out.push(`${indent}  </pasted>`);
+				}
 			}
 			for (const c of this.childrenOf(id)) walk(c, depth + 1);
 		};

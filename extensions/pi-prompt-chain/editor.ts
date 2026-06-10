@@ -246,10 +246,7 @@ export class PromptChainEditor extends CustomEditor {
 			return;
 		}
 		if (text.includes("\n")) {
-			const current = this.model.textOf(this.model.cursor.id);
-			const col = this.model.cursor.col;
-			const next = current.slice(0, col) + text + current.slice(col);
-			this.model.replaceCursorText(next, Math.min(next.length, col + text.length));
+			this.model.appendPastedToCursor(text);
 			return;
 		}
 		this.model.pasteText(text);
@@ -717,8 +714,7 @@ export class PromptChainEditor extends CustomEditor {
 		const prefixW = visibleWidth(firstBranch.plain) + 2 + cmdMark.length;
 		const textW = Math.max(4, width - prefixW);
 		const paint = (s: string) => (isBash ? thm.fg("muted", s) : isSlash ? thm.fg("accent", s) : s);
-		const displayRawText = rawText.includes("\n") ? rawText.split("\n", 1)[0]! : rawText;
-		const text = isSlash ? displayRawText.slice(1) : displayRawText;
+		const text = isSlash ? rawText.slice(1) : rawText;
 		const displayCaretCol = isSlash && caretCol >= 0 ? Math.max(0, caretCol - 1) : caretCol;
 
 		const firstPrefix = `${firstBranch.styled}${glyph} ${cmdMark ? thm.fg("muted", cmdMark) : ""}`;
@@ -829,8 +825,8 @@ export class PromptChainEditor extends CustomEditor {
 				for (const text of this.renderOutputBox(row.id, node.output, row, W, thm)) {
 					display.push({ text, cursor: false });
 				}
-			} else if (node?.kind === "node" && this.model.textOf(row.id).includes("\n") && !row.collapsed) {
-				for (const text of this.renderTextBox(row.id, this.model.textOf(row.id), row, W, thm, "pasted")) {
+			} else if (node?.kind === "node" && node.pasted && !row.collapsed) {
+				for (const text of this.renderTextBox(row.id, node.pasted, row, W, thm, "pasted")) {
 					display.push({ text, cursor: false });
 				}
 			}
