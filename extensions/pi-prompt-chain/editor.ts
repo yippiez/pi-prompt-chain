@@ -65,7 +65,6 @@ export class PromptChainEditor extends CustomEditor {
 		// editor.setText(). In outline mode, convert that restored text into outline
 		// nodes instead of leaving it in CustomEditor's hidden text buffer.
 		if (text.length > 0) {
-			this.queuedPromptDrafts.pop();
 			this.model = OutlineModel.fromMarkdown(text);
 			this.stopHistoryBrowse();
 			super.setText("");
@@ -110,11 +109,11 @@ export class PromptChainEditor extends CustomEditor {
 		// normal navigation at the first/last node cannot accidentally replace the draft.
 		if (matchesKey(data, "alt+up")) {
 			if (this.queuedPromptDrafts.length > 0 || this.ctx.hasPendingMessages()) {
-				const draft = this.queuedPromptDrafts.pop();
+				const drafts = this.queuedPromptDrafts.splice(0);
 				super.handleInput(data);
 				const restored = this.getText();
 				if (restored.length > 0) this.setText(restored);
-				else if (draft) this.model = OutlineModel.fromMarkdown(draft);
+				else if (drafts.length > 0) this.model = OutlineModel.fromMarkdown(drafts.join("\n"));
 				this.activeTui.requestRender();
 				return;
 			}
