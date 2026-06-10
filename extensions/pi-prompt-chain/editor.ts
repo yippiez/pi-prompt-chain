@@ -256,7 +256,10 @@ export class PromptChainEditor extends CustomEditor {
 		const text = this.model.textOf(id);
 		const chunks = wrapText(text, this.currentTextWidth());
 		const col = this.model.cursor.col;
-		const found = chunks.findIndex((chunk, i) => col >= chunk.start && col <= (chunks[i + 1]?.start ?? text.length));
+		const found = chunks.findIndex((chunk, i) => {
+			const nextStart = chunks[i + 1]?.start;
+			return col >= chunk.start && (nextStart === undefined ? col <= text.length : col < nextStart);
+		});
 		const idx = Math.max(0, found);
 		const current = chunks[idx] ?? { start: 0, str: "" };
 		const target = chunks[idx + delta];
@@ -265,8 +268,11 @@ export class PromptChainEditor extends CustomEditor {
 			return;
 		}
 		const x = Math.max(0, col - current.start);
-		const targetEnd = chunks[idx + delta + 1]?.start ?? text.length;
-		this.model.cursor.col = Math.min(target.start + x, targetEnd);
+		// A wrapped line's end offset is also the next line's start offset. Clamp to
+		// the last character cell on the target visual line so moving up from a line
+		// end doesn't land one cell to the right/down on the following wrap line.
+		const targetMaxCol = target.start + Math.max(0, target.str.length - 1);
+		this.model.cursor.col = Math.min(target.start + x, targetMaxCol);
 	}
 
 	private moveWordLeft(): void {
