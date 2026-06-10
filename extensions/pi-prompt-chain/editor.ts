@@ -99,7 +99,8 @@ export class PromptChainEditor extends CustomEditor {
 			this.completion = undefined;
 		}
 
-		if (matchesKey(data, Key.enter)) return this.run(() => m.enter());
+		if (matchesKey(data, "shift+enter")) return this.run(() => m.enter());
+		if (matchesKey(data, Key.enter)) return void this.sendOutline();
 		if (matchesKey(data, "ctrl+backspace")) return this.run(() => m.deleteCurrentNode());
 		if (matchesKey(data, "tab")) return this.run(() => m.indent());
 		if (matchesKey(data, "shift+tab")) return this.run(() => m.outdent());
