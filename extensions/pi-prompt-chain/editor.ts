@@ -248,7 +248,7 @@ export class PromptChainEditor extends CustomEditor {
 		const glyph = row.hasChildren ? (row.collapsed ? NODE_FILLED : NODE_OPEN) : row.isLast ? BRANCH_ELBOW : BRANCH_TEE;
 		const node = this.model.getNode(row.id);
 		const isBash = node?.kind === "bash";
-		const isSlash = node?.kind === "node" && this.model.textOf(row.id).startsWith("/");
+		const isSlash = row.depth === 0 && node?.kind === "node" && this.model.textOf(row.id).startsWith("/");
 		const prefixW = visibleWidth(`${branch}${glyph} ${isBash ? "$ " : isSlash ? "/" : ""}`);
 		return Math.max(4, W - prefixW);
 	}
@@ -388,6 +388,8 @@ export class PromptChainEditor extends CustomEditor {
 	}
 
 	private slashPrefixBeforeCursor(): string | null {
+		const row = this.model.visibleRows().find((r) => r.id === this.model.cursor.id);
+		if (!row || row.depth !== 0) return null;
 		const text = this.model.textOf(this.model.cursor.id).slice(0, this.model.cursor.col);
 		const match = text.match(/(?:^|\s)(\/[\w:-]*)$/);
 		return match?.[1] ?? null;
@@ -454,7 +456,7 @@ export class PromptChainEditor extends CustomEditor {
 		const slashCommand = this.singleSlashCommand();
 		if (slashCommand) {
 			super.setText(slashCommand);
-			super.handleInput(Key.enter);
+			super.handleInput("\r");
 			this.model = new OutlineModel(new Map(), [], new Set());
 			this.activeTui.requestRender();
 			return;
@@ -643,7 +645,7 @@ export class PromptChainEditor extends CustomEditor {
 		const node = this.model.getNode(row.id);
 		const isBash = node?.kind === "bash";
 		const rawText = this.model.textOf(row.id);
-		const isSlash = node?.kind === "node" && rawText.startsWith("/");
+		const isSlash = row.depth === 0 && node?.kind === "node" && rawText.startsWith("/");
 		const firstBranch = this.branchPrefix(row, false);
 		const contBranch = this.branchPrefix(row, true);
 		const glyph = isBash

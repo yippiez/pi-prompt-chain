@@ -1,7 +1,7 @@
 import { Container, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { OutlineModel, type NodeId, type VisibleRow } from "./nodes.ts";
-import { BRANCH, BRANCH_BLANK, BRANCH_ELBOW, BRANCH_TEE, NODE_FILLED, NODE_OPEN, PANEL_BG, SGR_RESET, fitBorder, wrapText } from "./render.ts";
+import { BRANCH, BRANCH_BLANK, BRANCH_ELBOW, BRANCH_TEE, NODE_FILLED, NODE_OPEN, fitBorder, wrapText } from "./render.ts";
 
 class RenderLines {
 	constructor(private readonly draw: (width: number) => string[]) {}
@@ -15,9 +15,9 @@ function renderNodeLines(model: OutlineModel, row: VisibleRow, width: number, th
 	const node = model.getNode(row.id);
 	const rawText = model.textOf(row.id);
 	const isBash = node?.kind === "bash";
-	const isSlash = node?.kind === "node" && rawText.startsWith("/");
+	const isSlash = row.depth === 0 && node?.kind === "node" && rawText.startsWith("/");
 	const branch = row.ancestorContinues.map((cont) => (cont ? BRANCH : BRANCH_BLANK)).join("");
-	const glyph = isSlash ? theme.fg("accent", NODE_FILLED) : row.hasChildren ? (row.collapsed ? NODE_FILLED : NODE_OPEN) : row.isLast ? BRANCH_ELBOW : BRANCH_TEE;
+	const glyph = isSlash ? theme.fg("accent", NODE_FILLED) : row.depth === 0 ? theme.fg("accent", row.hasChildren && row.collapsed ? NODE_FILLED : NODE_OPEN) : row.hasChildren ? (row.collapsed ? NODE_FILLED : NODE_OPEN) : row.isLast ? BRANCH_ELBOW : BRANCH_TEE;
 	const marker = isBash ? "$ " : isSlash ? "/" : "";
 	const firstPrefix = `${branch}${glyph} ${marker ? theme.fg("muted", marker) : ""}`;
 	const contPrefix = `${branch}${row.hasChildren ? BRANCH : BRANCH_BLANK} ${" ".repeat(marker.length)}`;
@@ -30,14 +30,9 @@ function renderNodeLines(model: OutlineModel, row: VisibleRow, width: number, th
 	});
 }
 
-function promptBg(line: string, width: number): string {
-	const padded = line + " ".repeat(Math.max(0, width - visibleWidth(line)));
-	return `${PANEL_BG}${truncateToWidth(padded, width, "")}${SGR_RESET}`;
-}
-
 function renderOutline(markdown: string, width: number, theme: any): string[] {
 	const model = OutlineModel.fromMarkdown(markdown);
-	const lines: string[] = [fitBorder(theme.fg("dim", " prompt "), "", width, (s) => theme.fg("dim", s))];
+	const lines: string[] = [fitBorder("", "", width, (s) => theme.fg("dim", s))];
 	for (const row of model.visibleRows()) {
 		lines.push(...renderNodeLines(model, row, width, theme));
 		const node = model.getNode(row.id);
@@ -48,7 +43,7 @@ function renderOutline(markdown: string, width: number, theme: any): string[] {
 		}
 	}
 	lines.push(fitBorder("", "", width, (s) => theme.fg("dim", s)));
-	return lines.map((line) => promptBg(line, width));
+	return lines;
 }
 
 export function registerPromptChainMessageRenderer(pi: ExtensionAPI): void {
