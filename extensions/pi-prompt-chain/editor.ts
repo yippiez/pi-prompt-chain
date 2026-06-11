@@ -108,7 +108,7 @@ export class PromptChainEditor extends CustomEditor {
 					m.enter();
 				});
 			}
-			return void this.sendOutline();
+			return this.run(() => m.enter());
 		}
 		if (matchesKey(data, "ctrl+backspace")) return this.run(() => m.deleteCurrentNode());
 		if (matchesKey(data, "tab")) return this.run(() => m.indent());
@@ -521,7 +521,7 @@ export class PromptChainEditor extends CustomEditor {
 			this.pi.sendMessage({ customType: "pi-prompt-chain-user", content: prompt, display: true, details: { markdown: md } }, { triggerTurn: true });
 		} else {
 			this.queuedPromptDrafts.push(md);
-			this.pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+			this.pi.sendMessage({ customType: "pi-prompt-chain-user", content: prompt, display: true, details: { markdown: md } }, { triggerTurn: true, deliverAs: "followUp" });
 		}
 		// Clear the outline — reset to a single empty root node.
 		this.model = new OutlineModel(new Map(), [], new Set());
