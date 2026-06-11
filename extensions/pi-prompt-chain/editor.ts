@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { CustomEditor, type ExtensionAPI, type ExtensionContext, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, visibleWidth, type AutocompleteItem, type AutocompleteProvider, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
+import { CustomEditor, DynamicBorder, type ExtensionAPI, type ExtensionContext, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import { Container, Key, Spacer, Text, matchesKey, truncateToWidth, visibleWidth, type AutocompleteItem, type AutocompleteProvider, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { OutlineModel, type NodeId, type OutlineSnapshot, type VisibleRow } from "./nodes.ts";
 import { BOX_CONTENT_H, BOX_MAX_W, BRANCH, BRANCH_BLANK, BRANCH_ELBOW, BRANCH_TEE, CURSOR_ROW_BG, NODE_FILLED, NODE_OPEN, PANEL_BG, PROMPT_HEIGHT_RATIO, bgFillLine, fitBorder, formatContext, formatCwd, sanitizeOutput, sliceDisplayWidth, wrapText } from "./render.ts";
 
@@ -157,6 +157,16 @@ export class PromptChainEditor extends CustomEditor {
 		if (matchesKey(data, "pageUp")) return this.run(() => this.scrollBox(-1));
 		if (matchesKey(data, "alt+right")) return this.run(() => this.scrollBoxHorizontal(1));
 		if (matchesKey(data, "alt+left")) return this.run(() => this.scrollBoxHorizontal(-1));
+
+		// Alt+E on a bash node: expand output in a full-screen red box.
+		if (matchesKey(data, "alt+e")) {
+			const b = this.model.cursorBash();
+			const node = b && this.model.getNode(b.id);
+			if (node?.kind === "bash" && node.output) {
+				this.showBashOutputBox(node.command, node.output);
+			}
+			return;
+		}
 
 		// "!" at the start of a plain node turns it into a bash node. If the node
 		// already has text, keep that text as the command instead of inserting "!".
@@ -691,6 +701,58 @@ export class PromptChainEditor extends CustomEditor {
 		thm: ExtensionContext["ui"]["theme"],
 	): string[] {
 		return this.renderTextBox(id, output, row, width, thm, "stdout");
+	}
+
+	/** Expand bash output in a full-screen red-bordered box (like pi-guardrails). */
+	private showBashOutputBox(command: string, output: string): void {
+		if (!this.ctx.hasUI) return;
+		const cleanOutput = sanitizeOutput(output).replace(/\n+$/, "");
+		this.ctx.ui.custom<void>((_tui, theme, _kb, done) => {
+			const container = new Container();
+			const redBorder = (s: string) => theme.fg("error", s);
+			let scrollOffset = 0;
+			const allLines = cleanOutput.split("\n");
+			let maxVisible = 10;
+
+			container.addChild(new DynamicBorder(redBorder));
+			container.addChild(new Text(theme.fg("error", theme.bold(`$ ${command}`)), 1, 0));
+			container.addChild(new Spacer(1));
+			const outputText = new Text("", 0, 0);
+			container.addChild(outputText);
+			container.addChild(new Spacer(1));
+			const statusBar = new Text("", 0, 0);
+			container.addChild(statusBar);
+			container.addChild(new DynamicBorder(redBorder));
+
+			return {
+				render(width: number) {
+					maxVisible = Math.max(1, (_tui?.terminal?.rows ?? 20) - 8);
+					const maxScroll = Math.max(0, allLines.length - maxVisible);
+					scrollOffset = Math.max(0, Math.min(scrollOffset, maxScroll));
+					const visible = allLines.slice(scrollOffset, scrollOffset + maxVisible);
+					outputText.setText(visible.join("\n"));
+					const statusParts: string[] = [];
+					if (scrollOffset > 0) statusParts.push(`↑${scrollOffset}`);
+					if (scrollOffset < maxScroll) statusParts.push(`↓${allLines.length - scrollOffset - maxVisible}`);
+					statusParts.push("Esc close");
+					statusBar.setText(theme.fg("dim", statusParts.join("  ")));
+					return container.render(width);
+				},
+				invalidate() { container.invalidate(); },
+				handleInput(data: string) {
+					if (matchesKey(data, "escape") || matchesKey(data, "q")) {
+						done(undefined as any);
+						return { consume: true };
+					}
+					if (matchesKey(data, Key.up) || data === "k") scrollOffset = Math.max(0, scrollOffset - 1);
+					else if (matchesKey(data, Key.down) || data === "j") scrollOffset++;
+					else if (matchesKey(data, "pageUp")) scrollOffset = Math.max(0, scrollOffset - maxVisible);
+					else if (matchesKey(data, "pageDown")) scrollOffset += maxVisible;
+					_tui?.requestRender();
+					return { consume: true };
+				},
+			};
+		});
 	}
 
 	/* ---- rendering ---- */
