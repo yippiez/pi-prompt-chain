@@ -17,11 +17,13 @@ function renderNodeLines(model: OutlineModel, row: VisibleRow, width: number, th
 	const isBash = node?.kind === "bash";
 	const isFirstRow = model.visibleRows()[0]?.id === row.id;
 	const isSlash = isFirstRow && row.depth === 0 && node?.kind === "node" && /^\/[\w:-]/.test(rawText);
-	const branch = row.ancestorContinues.map((cont) => (cont ? BRANCH : BRANCH_BLANK)).join("");
-	const glyph = isSlash ? theme.fg("accent", NODE_FILLED) : row.depth === 0 ? theme.fg("accent", row.hasChildren && row.collapsed ? NODE_FILLED : NODE_OPEN) : row.hasChildren ? (row.collapsed ? NODE_FILLED : NODE_OPEN) : row.isLast ? BRANCH_ELBOW : BRANCH_TEE;
+	const ancestorBranch = row.ancestorContinues.map((cont) => (cont ? BRANCH : BRANCH_BLANK)).join("");
+	const connector = row.depth === 0 ? "" : row.isLast ? BRANCH_ELBOW : BRANCH_TEE;
+	const glyph = isSlash ? theme.fg("accent", NODE_FILLED) : row.hasChildren && row.collapsed ? NODE_FILLED : NODE_OPEN;
 	const marker = isBash ? "$ " : isSlash ? "/" : "";
-	const firstPrefix = `${branch}${glyph} ${marker ? theme.fg("muted", marker) : ""}`;
-	const contPrefix = `${branch}${row.hasChildren ? BRANCH : BRANCH_BLANK}${" ".repeat(marker.length)}`;
+	const firstPrefix = `${theme.fg("dim", ancestorBranch)}${theme.fg("dim", connector)}${glyph} ${marker ? theme.fg("muted", marker) : ""}`;
+	const contGuide = row.hasChildren ? BRANCH : BRANCH_BLANK;
+	const contPrefix = `${theme.fg("dim", ancestorBranch)}${theme.fg("dim", contGuide)}${" ".repeat(marker.length)}`;
 	const textW = Math.max(4, width - visibleWidth(firstPrefix));
 	const text = isSlash ? rawText.slice(1) : rawText;
 	const paint = (s: string) => (isBash ? theme.fg("muted", s) : isSlash ? theme.fg("accent", s) : s);
