@@ -174,6 +174,13 @@ export class PromptChainEditor extends CustomEditor {
 			return;
 		}
 
+		// Escape: clear queued drafts, then let app handle abort.
+		if (matchesKey(data, "escape")) {
+			if (this.queuedPromptDrafts.length > 0) {
+				this.queuedPromptDrafts.splice(0);
+				this.activeTui.requestRender();
+			}
+		}
 		// Escape (abort), Ctrl+D (exit), Ctrl+P (model cycle), shortcuts -> app.
 		super.handleInput(data);
 	}
