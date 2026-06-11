@@ -21,13 +21,13 @@ function renderNodeLines(model: OutlineModel, row: VisibleRow, width: number, th
 	const glyph = isSlash ? theme.fg("accent", NODE_FILLED) : row.depth === 0 ? theme.fg("accent", row.hasChildren && row.collapsed ? NODE_FILLED : NODE_OPEN) : row.hasChildren ? (row.collapsed ? NODE_FILLED : NODE_OPEN) : row.isLast ? BRANCH_ELBOW : BRANCH_TEE;
 	const marker = isBash ? "$ " : isSlash ? "/" : "";
 	const firstPrefix = `${branch}${glyph} ${marker ? theme.fg("muted", marker) : ""}`;
-	const contPrefix = `${branch}${row.hasChildren ? BRANCH : BRANCH_BLANK} ${" ".repeat(marker.length)}`;
+	const contPrefix = `${branch}${row.hasChildren ? BRANCH : BRANCH_BLANK}${" ".repeat(marker.length)}`;
 	const textW = Math.max(4, width - visibleWidth(firstPrefix));
 	const text = isSlash ? rawText.slice(1) : rawText;
 	const paint = (s: string) => (isBash ? theme.fg("muted", s) : isSlash ? theme.fg("accent", s) : s);
 	return wrapText(text, textW).map((chunk, index) => {
 		const prefix = index === 0 ? firstPrefix : contPrefix;
-		return truncateToWidth(` ${prefix}${paint(chunk.str)}`, width, "…");
+		return truncateToWidth(`${prefix}${paint(chunk.str)}`, width, "…");
 	});
 }
 
@@ -48,11 +48,11 @@ function renderOutline(markdown: string, width: number, theme: any): string[] {
 		const node = model.getNode(row.id);
 		if (node?.kind === "bash" && node.output) {
 			for (const raw of node.output.split("\n").slice(0, 5)) {
-				lines.push(promptBg(theme.fg("dim", truncateToWidth(` ${BRANCH_BLANK}  ${raw}`, width, "…")), width));
+				lines.push(promptBg(theme.fg("dim", truncateToWidth(`${BRANCH_BLANK}  ${raw}`, width, "…")), width));
 			}
 		} else if (node?.kind === "node" && node.pasted) {
 			for (const raw of node.pasted.split("\n").slice(0, 5)) {
-				lines.push(promptBg(theme.fg("dim", truncateToWidth(` ${BRANCH_BLANK}  ${raw}`, width, "…")), width));
+				lines.push(promptBg(theme.fg("dim", truncateToWidth(`${BRANCH_BLANK}  ${raw}`, width, "…")), width));
 			}
 		}
 	}
