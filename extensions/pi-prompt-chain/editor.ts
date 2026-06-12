@@ -74,11 +74,10 @@ export class PromptChainEditor extends CustomEditor {
 		super.setText(text);
 	}
 
-	/** Clear stale local queue UI after Pi has no actual pending follow-ups. */
-	reconcileQueuedDrafts(options: { requireIdle?: boolean } = {}): void {
+	/** Clear stale local queue UI after Pi is idle and has no actual pending follow-ups. */
+	reconcileQueuedDrafts(): void {
 		if (this.queuedPromptDrafts.length === 0) return;
-		if (options.requireIdle !== false && !this.ctx.isIdle()) return;
-		if (this.ctx.hasPendingMessages()) return;
+		if (!this.ctx.isIdle() || this.ctx.hasPendingMessages()) return;
 		this.queuedPromptDrafts.splice(0);
 		this.activeTui.requestRender();
 	}
@@ -88,13 +87,6 @@ export class PromptChainEditor extends CustomEditor {
 		if (this.queuedPromptDrafts.length === 0) return;
 		this.queuedPromptDrafts.shift();
 		this.activeTui.requestRender();
-	}
-
-	/** Re-check shortly after follow-up enqueue/delivery boundaries settle. */
-	private scheduleQueueBadgeReconcile(): void {
-		for (const delay of [0, 50, 250, 1000]) {
-			setTimeout(() => this.reconcileQueuedDrafts({ requireIdle: false }), delay);
-		}
 	}
 
 	/** Clear timers on shutdown so the refresh interval doesn't outlive the session. */
@@ -555,7 +547,6 @@ export class PromptChainEditor extends CustomEditor {
 		} else {
 			this.queuedPromptDrafts.push(md);
 			this.pi.sendMessage({ customType: "pi-prompt-chain-user", content: prompt, display: true, details: { markdown: md } }, { triggerTurn: true, deliverAs: "followUp" });
-			this.scheduleQueueBadgeReconcile();
 		}
 		// Clear the outline — reset to a single empty root node.
 		this.model = new OutlineModel(new Map(), [], new Set());
