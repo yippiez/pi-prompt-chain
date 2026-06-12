@@ -74,6 +74,14 @@ export class PromptChainEditor extends CustomEditor {
 		super.setText(text);
 	}
 
+	/** Clear stale local queue UI after Pi has delivered all pending follow-ups. */
+	reconcileQueuedDrafts(): void {
+		if (this.queuedPromptDrafts.length === 0) return;
+		if (!this.ctx.isIdle() || this.ctx.hasPendingMessages()) return;
+		this.queuedPromptDrafts.splice(0);
+		this.activeTui.requestRender();
+	}
+
 	/** Clear timers on shutdown so the refresh interval doesn't outlive the session. */
 	async dispose(): Promise<void> {
 		if (this.refreshTimer) {

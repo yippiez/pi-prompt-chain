@@ -17,6 +17,12 @@ export default function (pi: ExtensionAPI) {
 		await activeEditor?.dispose();
 	});
 
+	pi.on("agent_end", () => {
+		// Pi has either delivered or depleted follow-up messages. Reconcile our
+		// local queued-draft badge so it cannot get stuck at "1 queued".
+		setTimeout(() => activeEditor?.reconcileQueuedDrafts(), 0);
+	});
+
 	pi.on("session_start", (_event, ctx) => {
 		// Footer: muted keybinding hints, below the editor's bottom prompt bar.
 		ctx.ui.setFooter((_tui, theme) => ({
