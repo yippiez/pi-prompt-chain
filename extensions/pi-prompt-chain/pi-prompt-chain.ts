@@ -17,6 +17,12 @@ export default function (pi: ExtensionAPI) {
 		await activeEditor?.dispose();
 	});
 
+	pi.on("message_start", (event) => {
+		if (event.message.role === "custom" && event.message.customType === "pi-prompt-chain-user") {
+			activeEditor?.markQueuedDraftStarted();
+		}
+	});
+
 	pi.on("agent_end", () => {
 		// Pi has either delivered or depleted follow-up messages. Reconcile our
 		// local queued-draft badge so it cannot get stuck at "1 queued".
