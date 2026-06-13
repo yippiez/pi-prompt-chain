@@ -1,3 +1,14 @@
+# Moved to pchain
+
+This repository has moved into the pchain monorepo:
+
+- https://github.com/yippiez/pchain
+- Pi implementation: `pchain/pi/`
+
+This repo is kept only for history and compatibility.
+
+---
+
 # pi-prompt-chain
 
 `pi-prompt-chain` is a standalone Pi extension that replaces pi's text prompt with a nestable outline editor.
