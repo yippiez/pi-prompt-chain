@@ -544,6 +544,29 @@ export class PromptChainEditor extends CustomEditor {
 		}
 		const md = this.model.composeMarkdown();
 		if (!md.trim()) return;
+		// /fork bridge: when the outline contains exactly one non-empty node
+		// holding a /fork <task> command, hand it off to the async-agents extension
+		// so the main LLM doesn't process it.
+		const rows = this.model.visibleRows();
+		const inputRows = rows.filter((r) => {
+			const t = this.model.textOf(r.id).trim();
+			return t.length > 0;
+		});
+		if (inputRows.length === 1 && this.ctx.isIdle()) {
+			const only = this.model.textOf(inputRows[0]!.id).trim();
+			const forkMatch = only.match(/^\/fork(?:\s+([\s\S]+))?$/);
+			if (forkMatch) {
+				const task = (forkMatch[1] ?? "").trim();
+				if (task) {
+					this.outlineHistory.push(this.model.snapshot());
+					this.stopHistoryBrowse();
+					this.pi.events.emit("pi-async-agents:fork", { task });
+					this.model = new OutlineModel(new Map(), [], new Set());
+					this.activeTui.requestRender();
+					return;
+				}
+			}
+		}
 		const prompt = await this.expandFileReferences(md);
 		this.outlineHistory.push(this.model.snapshot());
 		this.stopHistoryBrowse();
