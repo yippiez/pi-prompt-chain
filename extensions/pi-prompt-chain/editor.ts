@@ -146,7 +146,9 @@ export class PromptChainEditor extends CustomEditor {
 			return;
 		}
 		if (matchesKey(data, "alt+down")) {
-			this.navigateOutlineHistory(1);
+			if (!this.navigateOutlineHistory(1) && this.isAtLastVisibleRow()) {
+				this.pi.events.emit("pi-async-agents:panel:open", {});
+			}
 			return;
 		}
 		if (matchesKey(data, "ctrl+left")) return this.run(() => this.moveWordLeft());
@@ -359,6 +361,11 @@ export class PromptChainEditor extends CustomEditor {
 		while (i < text.length && /\s/.test(text[i]!)) i++;
 		while (i < text.length && !/\s/.test(text[i]!)) i++;
 		this.model.cursor.col = i;
+	}
+
+	private isAtLastVisibleRow(): boolean {
+		const rows = this.model.visibleRows();
+		return rows.length === 0 || rows[rows.length - 1]?.id === this.model.cursor.id;
 	}
 
 	private navigateOutlineHistory(dir: -1 | 1): boolean {
